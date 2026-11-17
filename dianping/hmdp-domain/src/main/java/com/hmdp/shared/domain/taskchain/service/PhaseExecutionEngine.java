@@ -15,12 +15,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * 阶段执行引擎（2026-10-29 健壮性增强）
+ * 阶段执行引擎（2026-10-29 健壮性增强；2026-11-18 部分成功模式）
  * <ul>
  *   <li><b>超时取消传播</b>：阶段超时后对每个节点 future 调 cancel(true)，
  *       经 TaskDispatcher 的句柄桥接真正中断工作线程——超时阶段不再留下孤儿任务；</li>
  *   <li><b>合并容错</b>：被取消节点的 merge 跳过（其 context 副本与主 context 隔离，
  *       残留写入只影响被丢弃的副本），不再让 CancellationException 冒泡；</li>
+ *   <li><b>部分成功模式（2026-11-18）</b>：阶段超时不再直接抛异常丢弃全部结果——
+ *       先取消在跑的节点，再照常跑合并循环，把<b>已完成节点的 output 与错误状态</b>
+ *       抢救回主 context，然后以"超时 + merged/cancelled 统计"标记失败。
+ *       failOnError=false 的链路因此可以在部分数据上继续执行；
+ *       failOnError=true 仍在阶段边界熔断（语义不变）。注意 attributes 本就是
+ *       copy() 共享的同一张表，超时真正会丢的只有 output 与错误合并；</li>
  *   <li><b>监听器 SPI</b>：阶段/节点结束时回调 TaskChainListener（可观测性扩展点，
  *       监听器异常吞掉降级为 WARN，不影响业务执行）。</li>
  * </ul>
@@ -137,8 +143,11 @@ public class PhaseExecutionEngine {
         }
 
         // ② 用 allOf 把 N 个 future 绑成一个，统一等待 + 超时控制；
-        //    超时后逐个 cancel(true) 中断工作线程（对响应中断的阻塞 IO 立即生效）
+        //    超时后逐个 cancel(true) 中断工作线程（对响应中断的阻塞 IO 立即生效）——
+        //    但不再在合并前直接抛出：先记下超时事实，走完合并循环抢救部分结果
         CompletableFuture<Void> all = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+        boolean phaseTimedOut = false;
+        TimeoutException timeoutCause = null;
         if (phaseConfig.getTimeout() > 0L) {
             try {
                 all.get(phaseConfig.getTimeout(), TimeUnit.MILLISECONDS);
@@ -146,7 +155,8 @@ public class PhaseExecutionEngine {
                 for (CompletableFuture<TaskContext<I, O>> future : futures) {
                     future.cancel(true);
                 }
-                throw new IllegalStateException("Phase timed out: " + phaseConfig.getPhase().getDesc(), e);
+                phaseTimedOut = true;
+                timeoutCause = e;
             }
         } else {
             // timeout <= 0 表示不限制，直接无超时阻塞等待
@@ -154,16 +164,31 @@ public class PhaseExecutionEngine {
         }
 
         // ③ 逐个拿节点副本，把错误状态 + 数据合并回主 context（顺序和原 nodes 列表一致）；
-        //    被超时取消的节点：跳过合并（副本整体丢弃），CancellationException 不外泄
+        //    被超时取消的节点：跳过合并（副本整体丢弃），CancellationException 不外泄。
+        //    部分成功模式（P3）：超时轮的合并照常执行——已完成节点的 output / 错误状态
+        //    在这里被抢救回主 context，而不是随异常整体丢弃。
+        int mergedNodes = 0;
+        int cancelledNodes = 0;
         for (CompletableFuture<TaskContext<I, O>> future : futures) {
             try {
                 TaskContext<I, O> nodeContext = future.get();
                 context.mergeError(nodeContext);   // 合并错误状态：节点失败了要让主 context 知道
                 context.mergeData(nodeContext);   // 合并数据：节点 setAttribute 的中间结果要带回主 context
+                mergedNodes++;
             } catch (CancellationException e) {
+                cancelledNodes++;
                 log.warn("parallel node cancelled by phase timeout, skip merge, phase={}",
                         phaseConfig.getPhase().name());
             }
+        }
+        if (phaseTimedOut) {
+            // 超时事实登记：failOnError=true 时 executePhase 据此返回失败并在阶段边界熔断；
+            // failOnError=false 时链路带着部分数据继续（部分成功模式的价值所在）
+            log.warn("phase timed out with partial merge: phase={}, merged={}, cancelled={}",
+                    phaseConfig.getPhase().name(), mergedNodes, cancelledNodes);
+            context.markFailed("Phase timed out: " + phaseConfig.getPhase().getDesc()
+                            + " (partial merge: merged=" + mergedNodes + ", cancelled=" + cancelledNodes + ")",
+                    timeoutCause);
         }
     }
 
