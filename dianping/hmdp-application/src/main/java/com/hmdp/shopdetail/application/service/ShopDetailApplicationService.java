@@ -132,6 +132,14 @@ public class ShopDetailApplicationService {
      * <p>先持久化申诉单，再触发无忧闪赔状态机驱动状态流转，最终回写状态到数据库。</p>
      */
     public GuaranteeClaim submitGuaranteeClaim(GuaranteeClaim claim) {
+        // P5 场景校验轻版（2026-11-18）：shopId 必须真实存在——此前场景校验只有
+        // reason/planCode 维度（在状态机里转人工），不存在的 shopId 会创建出
+        // 无主申诉单再走一轮状态机才被兜住；现在提交时快速失败。
+        // planCode 的规则校验保留在状态机（FlashPaySubmittedNode → 无金额规则转人工），
+        // 因为"无规则"是赔付策略语义，不完全是入参错误。
+        if (claim.getShopId() == null || shopService.getById(claim.getShopId()) == null) {
+            throw new IllegalArgumentException("shop not found: " + claim.getShopId());
+        }
         // 先落库，申诉单必须持久化成功才能驱动状态机，避免引擎跑完却找不到单据
         GuaranteeClaim savedClaim = domainService.createClaim(claim);
         // 共享引擎模块未装配时 facade 为 null（@Autowired required=false），跳过状态机只落库，保证接口可用

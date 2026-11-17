@@ -32,6 +32,11 @@ class ShopDetailApplicationServiceResultMessageTest {
         FlashPayStateMachineFacade facade = mock(FlashPayStateMachineFacade.class);
         ReflectionTestUtils.setField(service, "flashPayStateMachineFacade", facade);
 
+        // P5 场景校验：submitGuaranteeClaim 现在要求 shopId 真实存在
+        com.hmdp.service.IShopService shopService = mock(com.hmdp.service.IShopService.class);
+        when(shopService.getById(1L)).thenReturn(new com.hmdp.entity.Shop());
+        ReflectionTestUtils.setField(service, "shopService", shopService);
+
         GuaranteeClaim claim = new GuaranteeClaim();
         claim.setClaimNo("claim-t");
         claim.setShopId(1L);

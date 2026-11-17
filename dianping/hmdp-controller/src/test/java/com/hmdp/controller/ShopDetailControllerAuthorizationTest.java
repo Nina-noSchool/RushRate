@@ -80,8 +80,11 @@ class ShopDetailControllerAuthorizationTest {
     @Test
     void submitClaim_withLogin_bindsCurrentUserAndProceeds() {
         loginAs(OWNER_ID);
+        GuaranteeClaimCreateRequest request = new GuaranteeClaimCreateRequest();
+        request.setShopId(1L);
+        request.setPlanCode("PLAN-A");
 
-        Result result = controller.submitClaim(new GuaranteeClaimCreateRequest());
+        Result result = controller.submitClaim(request);
 
         assertTrue(result.getSuccess());
         ArgumentCaptor<GuaranteeClaim> captor = ArgumentCaptor.forClass(GuaranteeClaim.class);
@@ -150,5 +153,37 @@ class ShopDetailControllerAuthorizationTest {
 
         assertTrue(result.getSuccess());
         assertSame(claim, result.getData());
+    }
+
+    // ---- 场景校验轻版（P5）：入参快速失败，不创建注定转人工的申诉单 ----
+
+    @Test
+    void submitClaim_blankPlanCode_rejected() {
+        loginAs(OWNER_ID);
+        GuaranteeClaimCreateRequest request = new GuaranteeClaimCreateRequest();
+        request.setShopId(1L);
+        request.setPlanCode(" ");
+
+        Result result = controller.submitClaim(request);
+
+        assertFalse(result.getSuccess());
+        assertEquals("planCode不能为空", result.getErrorMsg());
+        verify(facade, never()).submitGuaranteeClaim(any());
+    }
+
+    @Test
+    void submitClaim_unknownShop_mappedToBusinessFail() {
+        loginAs(OWNER_ID);
+        GuaranteeClaimCreateRequest request = new GuaranteeClaimCreateRequest();
+        request.setShopId(99L);
+        request.setPlanCode("PLAN-A");
+        when(facade.submitGuaranteeClaim(any()))
+                .thenThrow(new IllegalArgumentException("shop not found: 99"));
+
+        Result result = controller.submitClaim(request);
+
+        // 应用层 shopId 存在性校验抛出的 IAE 被映射为业务失败，而不是 500
+        assertFalse(result.getSuccess());
+        assertEquals("shop not found: 99", result.getErrorMsg());
     }
 }

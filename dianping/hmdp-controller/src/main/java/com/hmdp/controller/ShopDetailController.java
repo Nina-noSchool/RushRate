@@ -49,12 +49,20 @@ public class ShopDetailController {
      * 越权防护（2026-11-17）：申诉单与登录用户绑定，未登录直接拒绝——
      * 拦截器已对 /shop/detail/guarantee/** 要求登录，这里判空是双保险，
      * 替换掉早期 "user == null ? 0L" 的匿名兜底（匿名申诉会造成无主单据）。
+     * 场景校验轻版（2026-11-18）：planCode 非空前置校验 + shopId 存在性由应用层校验
+     * （快速失败，不再创建注定转人工的申诉单）。
      */
     @PostMapping("/guarantee/claim")
     public Result submitClaim(@RequestBody GuaranteeClaimCreateRequest request) {
         UserDTO user = UserHolder.getUser();
         if (user == null) {
             return Result.fail("请先登录");
+        }
+        if (request.getShopId() == null) {
+            return Result.fail("shopId不能为空");
+        }
+        if (request.getPlanCode() == null || request.getPlanCode().isBlank()) {
+            return Result.fail("planCode不能为空");
         }
         GuaranteeClaim claim = new GuaranteeClaim();
         claim.setShopId(request.getShopId());
@@ -63,7 +71,11 @@ public class ShopDetailController {
         claim.setReason(request.getReason());
         claim.setClaimNo("claim-" + UUID.randomUUID().toString().replace("-", ""));
         claim.setStatus("SUBMITTED");
-        return Result.ok(shopDetailFacade.submitGuaranteeClaim(claim));
+        try {
+            return Result.ok(shopDetailFacade.submitGuaranteeClaim(claim));
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
     }
 
     /**
