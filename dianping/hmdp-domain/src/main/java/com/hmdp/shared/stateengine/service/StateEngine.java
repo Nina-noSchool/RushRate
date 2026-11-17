@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 状态机引擎 — 通用状态机运行时，驱动任务在状态节点间流转。
@@ -35,6 +36,8 @@ public class StateEngine {
     private final StateTransitionLogRepository logRepository;
     /** 重试策略，失败路径中通过 canRetry(task) 判断是否还能重试（与 FailurePolicy 联合决策） */
     private final RetryPolicy retryPolicy;
+    /** 终局监听器（可观测性 SPI）：任务到达 COMPLETED/FAILED/MANUAL_REVIEW 时回调，异常被引擎吞掉 */
+    private final List<StateEngineListener> listeners;
 
     /**
      * 构造函数注入四个必选依赖。
@@ -54,10 +57,24 @@ public class StateEngine {
                        StateTaskRepository taskRepository,
                        StateTransitionLogRepository logRepository,
                        RetryPolicy retryPolicy) {
+        this(registry, taskRepository, logRepository, retryPolicy, List.of());
+    }
+
+    /**
+     * 带终局监听器的完整构造（2026-11-18 可观测性扩展）。
+     * <p>监听器在任务到达 COMPLETED/FAILED/MANUAL_REVIEW 时回调一次，
+     * 见 {@link StateEngineListener#onTaskFinished}；监听器异常被引擎吞掉。</p>
+     */
+    public StateEngine(StateMachineRegistry registry,
+                       StateTaskRepository taskRepository,
+                       StateTransitionLogRepository logRepository,
+                       RetryPolicy retryPolicy,
+                       List<StateEngineListener> listeners) {
         this.registry = registry;
         this.taskRepository = taskRepository;
         this.logRepository = logRepository;
         this.retryPolicy = retryPolicy;
+        this.listeners = List.copyOf(listeners);
     }
 
     /**
@@ -123,6 +140,8 @@ public class StateEngine {
     private StateTask run(StateTask task) {
         // 根据任务的machineCode找到对应的状态机定义
         StateMachineDefinition machine = registry.getRequired(task.getMachineCode());
+        // 本次驱动的起始时刻：终局监听器的 costMs 以此为基准（覆盖整段 run 循环，不只是单个节点）
+        long runStartMs = System.currentTimeMillis();
         while (true) {
             // 1. 获取当前状态对应的节点处理器
             StateNode node = machine.getRequiredNode(task.getCurrentState());
@@ -162,6 +181,7 @@ public class StateEngine {
             if (result.isSuccess() && result.isTerminal()) {
                 task.markCompleted(node.getStateCode(), result.getMessage());
                 taskRepository.update(task);
+                fireTaskFinished(task, System.currentTimeMillis() - runStartMs, true, result.getMessage());
                 return task;
             }
 
@@ -183,7 +203,24 @@ public class StateEngine {
                 task.markManualReview(decision.getMessage());
             }
             taskRepository.update(task);
+            fireTaskFinished(task, System.currentTimeMillis() - runStartMs, false, result.getMessage());
             return task;
+        }
+    }
+
+    /**
+     * 终局监听器回调 —— 逐个调用并互相隔离：单个监听器抛异常只降级为 WARN，
+     * 不影响其他监听器，更不影响业务执行（与 TaskChainListener 的吞噬纪律一致）。
+     */
+    private void fireTaskFinished(StateTask task, long costMs, boolean success, String error) {
+        for (StateEngineListener listener : listeners) {
+            try {
+                listener.onTaskFinished(task.getMachineCode(), task.getTaskId(),
+                        task.getRuntimeStatus().name(), costMs, success, error);
+            } catch (Exception e) {
+                log.warn("state engine listener threw, ignored, listener={}, taskId={}",
+                        listener.getClass().getSimpleName(), task.getTaskId(), e);
+            }
         }
     }
 }

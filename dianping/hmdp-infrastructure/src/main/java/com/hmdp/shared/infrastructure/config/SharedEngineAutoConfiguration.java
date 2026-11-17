@@ -90,12 +90,14 @@ public class SharedEngineAutoConfiguration {
     @Bean
     public StateEngine stateEngine(StateMachineRegistry stateMachineRegistry, RetryPolicy retryPolicy,
                                    StateTaskRepository stateTaskRepository,
-                                   StateTransitionLogRepository stateTransitionLogRepository) {
+                                   StateTransitionLogRepository stateTransitionLogRepository,
+                                   org.springframework.beans.factory.ObjectProvider<com.hmdp.shared.stateengine.service.StateEngineListener> listeners) {
         return new StateEngine(
                 stateMachineRegistry,
                 stateTaskRepository,
                 stateTransitionLogRepository,
-                retryPolicy
+                retryPolicy,
+                listeners.orderedStream().toList()
         );
     }
 
