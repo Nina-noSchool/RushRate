@@ -9,6 +9,7 @@ import com.hmdp.utils.UserHolder;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.annotation.Resource;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -45,13 +46,19 @@ public class ShopDetailController {
     /**
      * 创建保障申诉单。
      * claimNo 在控制器层生成，确保提交后即使后续进入异步补偿流，也能稳定回查这次申诉。
+     * 越权防护（2026-11-17）：申诉单与登录用户绑定，未登录直接拒绝——
+     * 拦截器已对 /shop/detail/guarantee/** 要求登录，这里判空是双保险，
+     * 替换掉早期 "user == null ? 0L" 的匿名兜底（匿名申诉会造成无主单据）。
      */
     @PostMapping("/guarantee/claim")
     public Result submitClaim(@RequestBody GuaranteeClaimCreateRequest request) {
         UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
         GuaranteeClaim claim = new GuaranteeClaim();
         claim.setShopId(request.getShopId());
-        claim.setUserId(user == null ? 0L : user.getId());
+        claim.setUserId(user.getId());
         claim.setPlanCode(request.getPlanCode());
         claim.setReason(request.getReason());
         claim.setClaimNo("claim-" + UUID.randomUUID().toString().replace("-", ""));
@@ -59,15 +66,45 @@ public class ShopDetailController {
         return Result.ok(shopDetailFacade.submitGuaranteeClaim(claim));
     }
 
-    /** 查询单个保障申诉的最新处理状态。 */
+    /**
+     * 查询单个保障申诉的最新处理状态。
+     * 越权防护（2026-11-17）：仅属主可查——claimNo 泄露（日志/截图/转发）时，
+     * 他人无法借此探到申诉内容与进度；属主不匹配与单据不存在返回同一类业务失败，不泄露存在性。
+     */
     @GetMapping("/guarantee/claim/{claimNo}")
     public Result getGuaranteeClaim(@PathVariable("claimNo") String claimNo) {
-        return Result.ok(shopDetailFacade.getGuaranteeClaim(claimNo));
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
+        GuaranteeClaim claim = shopDetailFacade.getGuaranteeClaim(claimNo);
+        if (claim == null) {
+            return Result.fail("申诉单不存在");
+        }
+        if (!Objects.equals(user.getId(), claim.getUserId())) {
+            return Result.fail("无权查看该申诉单");
+        }
+        return Result.ok(claim);
     }
 
-    /** 重试保障申诉，超过最大重试次数时转人工审核。 */
+    /**
+     * 重试保障申诉，超过最大重试次数时转人工审核。
+     * 越权防护（2026-11-17）：仅属主可重试——重试会真实驱动赔付状态机（重放节点），
+     * 若按 claimNo 不校验属主，拿到单号就能驱动别人的申诉流转，属于横向越权。
+     */
     @PostMapping("/guarantee/claim/{claimNo}/retry")
     public Result retryGuaranteeClaim(@PathVariable("claimNo") String claimNo) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
+        GuaranteeClaim claim = shopDetailFacade.getGuaranteeClaim(claimNo);
+        if (claim == null) {
+            return Result.fail("申诉单不存在");
+        }
+        if (!Objects.equals(user.getId(), claim.getUserId())) {
+            return Result.fail("无权操作该申诉单");
+        }
         return Result.ok(shopDetailFacade.retryGuaranteeClaim(claimNo));
     }
 }

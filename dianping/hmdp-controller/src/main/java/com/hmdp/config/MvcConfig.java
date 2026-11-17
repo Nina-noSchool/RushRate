@@ -51,14 +51,23 @@ public class MvcConfig implements WebMvcConfigurer {
      */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        // 登录拦截器：校验登录状态，排除公开路径
+        // 登录拦截器：校验登录状态，排除公开路径。
+        // ⚠ 商铺与优惠券的公开路径按"只读白名单"收敛（2026-11-17 越权防护）：
+        //   早期 "/shop/**"、"/voucher/**" 整体放行，导致写操作（新增/更新店铺、新增优惠券）
+        //   以及保障申诉的提交/查询/重试全部匿名可达——既是横向越权，也是未登录可改数据。
+        //   现在只放行确属公开读的路径，其余一律要求登录；管理端角色门槛（RBAC）是下一步。
+        //   注意 "/shop/{id}" 按路径会顺带覆盖 POST /shop/review（同为两段路径），
+        //   但 review 控制器自带 UserHolder 判空兜底，匿名提交仍会被业务拒绝。
         registry.addInterceptor(new LoginInterceptor())
                 .excludePathPatterns(
                         "/user/login",
                         "/upload/**",
-                        "/voucher/**",
+                        "/voucher/list/{shopId}",
                         "/user/code",
-                        "/shop/**",
+                        "/shop/{id}",
+                        "/shop/of/type",
+                        "/shop/of/name",
+                        "/shop/detail/{shopId}",
                         "/shop-type/**",
                         "/blog/hot",
                         "/jvm/**"

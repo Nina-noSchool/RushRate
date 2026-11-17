@@ -25,6 +25,8 @@ public class VoucherController {
 
     /**
      * 新增普通券
+     * <p>管理端语义操作（2026-11-17 起：拦截器收敛后需要登录；此前 "/voucher/**" 整体放行，
+     * 匿名可造秒杀券——券是库存与资金语义的入口，必须先有登录门槛。RBAC 是下一步。）</p>
      * @param voucher 优惠券信息
      * @return 优惠券id
      */
