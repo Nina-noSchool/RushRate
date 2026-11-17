@@ -2,10 +2,14 @@ package com.hmdp.controller;
 
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
+import com.hmdp.shopdetail.application.model.request.ClaimTicketRequest;
+import com.hmdp.shopdetail.application.model.request.ClaimTicketResolveRequest;
 import com.hmdp.shopdetail.application.model.request.GuaranteeClaimCreateRequest;
 import com.hmdp.shopdetail.domain.model.GuaranteeClaim;
 import com.hmdp.shopdetail.facade.ShopDetailFacade;
+import com.hmdp.shopdetail.infrastructure.ticket.ClaimReviewTicketService;
 import com.hmdp.utils.UserHolder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.annotation.Resource;
@@ -32,6 +36,10 @@ public class ShopDetailController {
 
     @Resource
     private ShopDetailFacade shopDetailFacade;
+
+    /** 闪赔人工审核工单服务（P8）：属主开工单/查流水，管理端回执驱动状态机收口 */
+    @Autowired(required = false)
+    private ClaimReviewTicketService claimReviewTicketService;
 
     void setShopDetailFacade(ShopDetailFacade shopDetailFacade) {
         this.shopDetailFacade = shopDetailFacade;
@@ -118,5 +126,79 @@ public class ShopDetailController {
             return Result.fail("无权操作该申诉单");
         }
         return Result.ok(shopDetailFacade.retryGuaranteeClaim(claimNo));
+    }
+
+    /**
+     * 属主为申诉单开工单（P8）：申诉进入 MANUAL_REVIEW 后补充材料/催办。
+     * 越权防护：仅属主可开。
+     */
+    @PostMapping("/guarantee/claim/{claimNo}/ticket")
+    public Result openClaimTicket(@PathVariable("claimNo") String claimNo,
+                                  @RequestBody ClaimTicketRequest request) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
+        if (claimReviewTicketService == null) {
+            return Result.fail("工单服务未装配");
+        }
+        GuaranteeClaim claim = shopDetailFacade.getGuaranteeClaim(claimNo);
+        if (claim == null) {
+            return Result.fail("申诉单不存在");
+        }
+        if (!Objects.equals(user.getId(), claim.getUserId())) {
+            return Result.fail("无权操作该申诉单");
+        }
+        if (request.getContent() == null || request.getContent().isBlank()) {
+            return Result.fail("content不能为空");
+        }
+        return Result.ok(claimReviewTicketService.open(claimNo, user.getId(), request.getContent()));
+    }
+
+    /** 属主查询申诉单的工单流水（创建时间升序）。越权防护：仅属主可查。 */
+    @GetMapping("/guarantee/claim/{claimNo}/tickets")
+    public Result listClaimTickets(@PathVariable("claimNo") String claimNo) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
+        if (claimReviewTicketService == null) {
+            return Result.fail("工单服务未装配");
+        }
+        GuaranteeClaim claim = shopDetailFacade.getGuaranteeClaim(claimNo);
+        if (claim == null) {
+            return Result.fail("申诉单不存在");
+        }
+        if (!Objects.equals(user.getId(), claim.getUserId())) {
+            return Result.fail("无权查看该申诉单");
+        }
+        return Result.ok(claimReviewTicketService.findByClaimNo(claimNo));
+    }
+
+    /**
+     * 管理端回执工单/申诉（P8）：给出人工结论并驱动状态机 resume 收口。
+     * <p>管理语义：回执人不要求属主（客服处理他人申诉），登录门槛来自拦截器；
+     * 角色门槛 RBAC 是下一步。</p>
+     */
+    @PostMapping("/guarantee/claim/{claimNo}/ticket/resolve")
+    public Result resolveClaimTicket(@PathVariable("claimNo") String claimNo,
+                                     @RequestBody ClaimTicketResolveRequest request) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
+        if (claimReviewTicketService == null) {
+            return Result.fail("工单服务未装配");
+        }
+        if (request.getOutcome() == null
+                || (!"APPROVED".equals(request.getOutcome()) && !"REJECTED".equals(request.getOutcome()))) {
+            return Result.fail("outcome 必须为 APPROVED 或 REJECTED");
+        }
+        try {
+            claimReviewTicketService.resolve(claimNo, request.getOutcome(), request.getResolution());
+            return Result.ok("工单已回执");
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
     }
 }

@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.lang.reflect.Field;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -185,5 +187,67 @@ class ShopDetailControllerAuthorizationTest {
         // 应用层 shopId 存在性校验抛出的 IAE 被映射为业务失败，而不是 500
         assertFalse(result.getSuccess());
         assertEquals("shop not found: 99", result.getErrorMsg());
+    }
+
+    // ---- 工单（P8）：属主开单，非属主拒绝 ----
+
+    @Test
+    void openClaimTicket_byNonOwner_rejected() {
+        loginAs(ATTACKER_ID);
+        when(facade.getGuaranteeClaim(CLAIM_NO)).thenReturn(ownedClaim());
+        com.hmdp.shopdetail.infrastructure.ticket.ClaimReviewTicketService ticketService =
+                mock(com.hmdp.shopdetail.infrastructure.ticket.ClaimReviewTicketService.class);
+        setField(controller, "claimReviewTicketService", ticketService);
+
+        com.hmdp.shopdetail.application.model.request.ClaimTicketRequest request =
+                new com.hmdp.shopdetail.application.model.request.ClaimTicketRequest();
+        request.setContent("补充材料");
+        Result result = controller.openClaimTicket(CLAIM_NO, request);
+
+        assertFalse(result.getSuccess());
+        assertEquals("无权操作该申诉单", result.getErrorMsg());
+        verify(ticketService, never()).open(any(), any(), any());
+    }
+
+    @Test
+    void openClaimTicket_byOwner_proceeds() {
+        loginAs(OWNER_ID);
+        when(facade.getGuaranteeClaim(CLAIM_NO)).thenReturn(ownedClaim());
+        com.hmdp.shopdetail.infrastructure.ticket.ClaimReviewTicketService ticketService =
+                mock(com.hmdp.shopdetail.infrastructure.ticket.ClaimReviewTicketService.class);
+        setField(controller, "claimReviewTicketService", ticketService);
+        com.hmdp.shopdetail.application.model.request.ClaimTicketRequest request =
+                new com.hmdp.shopdetail.application.model.request.ClaimTicketRequest();
+        request.setContent("补充材料");
+
+        Result result = controller.openClaimTicket(CLAIM_NO, request);
+
+        assertTrue(result.getSuccess());
+        verify(ticketService).open(CLAIM_NO, OWNER_ID, "补充材料");
+    }
+
+    @Test
+    void resolveClaimTicket_invalidOutcome_rejected() {
+        loginAs(OWNER_ID);
+        com.hmdp.shopdetail.infrastructure.ticket.ClaimReviewTicketService ticketService =
+                mock(com.hmdp.shopdetail.infrastructure.ticket.ClaimReviewTicketService.class);
+        setField(controller, "claimReviewTicketService", ticketService);
+        com.hmdp.shopdetail.application.model.request.ClaimTicketResolveRequest request =
+                new com.hmdp.shopdetail.application.model.request.ClaimTicketResolveRequest();
+        request.setOutcome("MAYBE");
+
+        Result result = controller.resolveClaimTicket(CLAIM_NO, request);
+
+        assertEquals("outcome 必须为 APPROVED 或 REJECTED", result.getErrorMsg());
+    }
+
+    private static void setField(Object target, String name, Object value) {
+        try {
+            Field field = target.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            field.set(target, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("字段注入失败: " + name, e);
+        }
     }
 }
