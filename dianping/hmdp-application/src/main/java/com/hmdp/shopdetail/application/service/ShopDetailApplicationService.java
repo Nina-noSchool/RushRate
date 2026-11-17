@@ -42,6 +42,15 @@ public class ShopDetailApplicationService {
     /** result_message 列宽 varchar(255) 的安全截断上限（VM 实弹验证发现的回写 Data truncation 缺陷） */
     private static final int RESULT_MESSAGE_MAX_LENGTH = 250;
 
+    /**
+     * 商详聚合并行开关（2026-11-18，P2 对照实验）。
+     * <p>默认 true 走任务链并行聚合；置 false 强制走 domainService 的串行查库路径——
+     * 与"引擎未装配"的降级是同一条代码路径，从而构成并行/串行的单变量对照实验
+     * （Q31 口播的"对照 RT 轮"就是靠它跑的）。实测数字以压测报告为准，不预写结论。</p>
+     */
+    @org.springframework.beans.factory.annotation.Value("${shopdetail.parallel-enabled:true}")
+    private boolean parallelEnabled;
+
     /** 领域服务，负责真正的聚合规则与衍生规则。 */
     private final ShopDetailDomainService domainService;
     /** 评分刷新服务，商详返回后异步触发，不阻塞主请求。 */
@@ -90,8 +99,9 @@ public class ShopDetailApplicationService {
      */
     public ShopDetailAggregate getShopDetail(Long shopId) {
         ShopDetailAggregate detail;
-        if (taskChainEngine == null) {
-            // 降级：引擎未装配（测试环境或共享引擎未加载），走老的串行查库路径兜底，保证接口可用
+        if (taskChainEngine == null || !parallelEnabled) {
+            // 降级/对照：引擎未装配（测试环境或共享引擎未加载）或并行开关关闭（P2 对照实验），
+            // 走老的串行查库路径兜底，保证接口可用
             detail = domainService.getShopDetail(shopId);
         } else {
             // 新建 context：贯穿整条链路的数据容器，节点间共享数据全靠它

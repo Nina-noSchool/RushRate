@@ -105,6 +105,12 @@ seckill:
     batch:
       enabled: false
 
+# ===== P2 对照实验：商详聚合并行开关（默认并行） =====
+# false 强制走 domainService 的串行查库路径（与"引擎未装配"降级同一条代码路径），
+# 构成并行/串行的单变量对照；实测数字见压测归档，不预写结论。
+shopdetail:
+  parallel-enabled: true
+
 # ===== 批次3 ②：多级缓存开关（L1 本地 Caffeine；false=完全回退单级 Redis 逻辑过期链路） =====
 cache:
   local:
