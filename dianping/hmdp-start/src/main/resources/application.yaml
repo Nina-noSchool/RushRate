@@ -111,6 +111,17 @@ seckill:
 shopdetail:
   parallel-enabled: true
 
+# ===== P4 闪赔 retryable 分层重试（默认关） =====
+# 开关开启前置：支付幂等能力验证通过（网关按 claimNo 幂等）。
+# 开启后 retryable 失败进入 FAILED，由 FlashPayStateRetryJob 按指数退避 resume；
+# 重试耗尽自动转 MANUAL_REVIEW。关闭时失败一律转人工（旧语义）。
+dewu:
+  compensation:
+    retry:
+      max-retry-count: 3
+      flash-pay-retry-enabled: false
+      flash-pay-retry-delay-seconds: 30
+
 # ===== 批次3 ②：多级缓存开关（L1 本地 Caffeine；false=完全回退单级 Redis 逻辑过期链路） =====
 cache:
   local:

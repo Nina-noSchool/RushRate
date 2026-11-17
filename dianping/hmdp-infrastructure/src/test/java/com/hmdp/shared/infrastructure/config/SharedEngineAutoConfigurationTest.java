@@ -24,7 +24,8 @@ class SharedEngineAutoConfigurationTest {
                 new PayoutAmountCalculator(Collections.singletonMap("FLASH_PAY", 50L), 500L),
                 new InMemoryPayoutGateway(MockMode.SUCCESS),
                 new InMemoryPayoutAuditRepository(),
-                new LoggingPayoutNotificationService());
+                new LoggingPayoutNotificationService(),
+                new CompensationRetryProperties());
 
         assertDoesNotThrow(() -> registry.getRequired(FlashPayStateCode.MACHINE_CODE));
         assertThrows(IllegalArgumentException.class,

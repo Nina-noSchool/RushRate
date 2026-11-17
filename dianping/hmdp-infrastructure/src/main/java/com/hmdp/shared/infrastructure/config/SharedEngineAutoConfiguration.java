@@ -81,9 +81,11 @@ public class SharedEngineAutoConfiguration {
     public StateMachineRegistry stateMachineRegistry(PayoutAmountCalculator calculator,
                                                       PayoutGateway gateway,
                                                       PayoutAuditRepository auditRepository,
-                                                      PayoutNotificationService notificationService) {
+                                                      PayoutNotificationService notificationService,
+                                                      CompensationRetryProperties properties) {
         StateMachineRegistry registry = new StateMachineRegistry();
-        registry.register(new FlashPayStateMachineDefinition(calculator, gateway, auditRepository, notificationService));
+        registry.register(new FlashPayStateMachineDefinition(calculator, gateway, auditRepository, notificationService,
+                properties.isFlashPayRetryEnabled()));
         return registry;
     }
 

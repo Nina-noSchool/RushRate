@@ -5,6 +5,8 @@ import com.hmdp.shared.stateengine.model.StateTaskStatus;
 import com.hmdp.shared.stateengine.spi.InMemoryStateTaskRepository;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -79,5 +81,28 @@ class InMemoryStateTaskRepositoryTest {
         assertTrue(repository.claimForResume(failed));
         // 第二个触发源再抢：状态已 RUNNING，必然失败——双执行被挡下
         assertFalse(repository.claimForResume(failed));
+    }
+
+    @Test
+    void findByMachineCodeAndStatus_shouldFilterByMachineAndRuntimeStatus() {
+        InMemoryStateTaskRepository repository = new InMemoryStateTaskRepository();
+
+        StateTask failed = StateTask.create("task-f", "biz-f", "FLASH_PAY", "PAYMENT", "payload");
+        failed.markFailed("PAYMENT", "gateway timeout");
+        repository.save(failed);
+        StateTask manual = StateTask.create("task-m", "biz-m", "FLASH_PAY", "PAYMENT", "payload");
+        manual.markManualReview("need human");
+        repository.save(manual);
+        StateTask otherMachine = StateTask.create("task-o", "biz-o", "OTHER_MACHINE", "CHECKING", "payload");
+        otherMachine.markFailed("CHECKING", "other machine failure");
+        repository.save(otherMachine);
+
+        List<StateTask> failedFlashPay = repository.findByMachineCodeAndStatus("FLASH_PAY", StateTaskStatus.FAILED);
+
+        // 只命中 FLASH_PAY + FAILED：MANUAL_REVIEW 与其他机器码的任务都不进重试扫描范围
+        assertEquals(1, failedFlashPay.size());
+        assertEquals("task-f", failedFlashPay.get(0).getTaskId());
+        assertEquals(0, repository.findByMachineCodeAndStatus("FLASH_PAY", StateTaskStatus.COMPLETED).size());
+        assertEquals(1, repository.findByMachineCodeAndStatus("OTHER_MACHINE", StateTaskStatus.FAILED).size());
     }
 }

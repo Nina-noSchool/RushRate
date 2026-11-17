@@ -11,6 +11,9 @@ import org.springframework.stereotype.Repository;
 
 import jakarta.annotation.Resource;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 状态机任务仓储 MyBatis 实现
  * <p>
@@ -110,6 +113,33 @@ public class MybatisStateTaskRepository implements StateTaskRepository {
                 .set("runtime_status", com.hmdp.shared.stateengine.model.StateTaskStatus.RUNNING.name())
                 .set("updated_at", java.time.LocalDateTime.now());
         return stateTaskMapper.update(null, uw) > 0;
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>DB 实现：machine_code + runtime_status 等值查询，restore 重建领域对象。</p>
+     */
+    @Override
+    public List<StateTask> findByMachineCodeAndStatus(String machineCode, StateTaskStatus runtimeStatus) {
+        QueryWrapper<com.hmdp.shared.infrastructure.persistence.dataobject.StateTask> wrapper = new QueryWrapper<>();
+        wrapper.eq("machine_code", machineCode).eq("runtime_status", runtimeStatus.name());
+        List<com.hmdp.shared.infrastructure.persistence.dataobject.StateTask> rows = stateTaskMapper.selectList(wrapper);
+        List<StateTask> result = new ArrayList<>(rows.size());
+        for (com.hmdp.shared.infrastructure.persistence.dataobject.StateTask row : rows) {
+            result.add(StateTask.restore(
+                    row.getTaskId(),
+                    row.getBizKey(),
+                    row.getMachineCode(),
+                    row.getPayload(),
+                    row.getCurrentState(),
+                    StateTaskStatus.valueOf(row.getRuntimeStatus()),
+                    row.getLastMessage(),
+                    row.getRetryCount(),
+                    row.getCreatedAt(),
+                    row.getUpdatedAt()
+            ));
+        }
+        return result;
     }
 
     private com.hmdp.shared.infrastructure.persistence.dataobject.StateTask toDataObject(StateTask task) {

@@ -1,6 +1,9 @@
 package com.hmdp.shared.stateengine.spi;
 
 import com.hmdp.shared.stateengine.model.StateTask;
+import com.hmdp.shared.stateengine.model.StateTaskStatus;
+
+import java.util.List;
 
 /**
  * 状态机任务持久化仓库 — SPI 扩展点，定义 StateTask 的存储与查询契约。
@@ -54,4 +57,16 @@ public interface StateTaskRepository {
      * @return true=抢占成功（状态已置 RUNNING，调用方可以驱动执行）；false=抢占失败（他人已接管或状态不匹配）
      */
     boolean claimForResume(StateTask task);
+
+    /**
+     * 按机器码与运行时状态批量查询任务（2026-11-18 重试调度引入）。
+     *
+     * <p>用途：重试调度 Job 扫描 FAILED 状态的任务，按退避节奏驱动
+     * {@code StateEngine.resume}（resume 内部的 claimForResume CAS 保证并发安全）。</p>
+     *
+     * @param machineCode   状态机编码（如 FLASH_PAY）
+     * @param runtimeStatus 运行时状态（重试调度查询 FAILED）
+     * @return 匹配的任务列表（无匹配返回空列表，不返回 null）
+     */
+    List<StateTask> findByMachineCodeAndStatus(String machineCode, StateTaskStatus runtimeStatus);
 }

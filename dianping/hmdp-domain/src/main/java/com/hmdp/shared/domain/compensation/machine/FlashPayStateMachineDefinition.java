@@ -56,13 +56,28 @@ public class FlashPayStateMachineDefinition extends StateMachineDefinition {
                                           PayoutGateway gateway,
                                           PayoutAuditRepository auditRepository,
                                           PayoutNotificationService notificationService) {
+        this(calculator, gateway, auditRepository, notificationService, false);
+    }
+
+    /**
+     * 完整构造（2026-11-18，P4 retryable 分层）。
+     *
+     * @param failureRetryEnabled true 时，retryable 的基础设施类失败（如支付超时）
+     *                            按重试预算进入 FAILED 等待重试调度 resume；
+     *                            false 时失败一律转人工（既有语义）
+     */
+    public FlashPayStateMachineDefinition(PayoutAmountCalculator calculator,
+                                          PayoutGateway gateway,
+                                          PayoutAuditRepository auditRepository,
+                                          PayoutNotificationService notificationService,
+                                          boolean failureRetryEnabled) {
         super(builder(FlashPayStateCode.MACHINE_CODE, FlashPayStateCode.SUBMITTED.name())
                 .addNode(new FlashPaySubmittedNode())
                 .addNode(new FlashPayApprovedNode(calculator, gateway))
                 .addNode(new FlashPayCompletedNode(gateway, auditRepository, notificationService, calculator))
                 .addNode(new FlashPayManualReviewNode())
                 .terminalStates(Collections.singleton(FlashPayStateCode.COMPLETED.name()))
-                .failurePolicy(new FlashPayFailurePolicy())
+                .failurePolicy(new FlashPayFailurePolicy(failureRetryEnabled))
                 .build());
     }
 }

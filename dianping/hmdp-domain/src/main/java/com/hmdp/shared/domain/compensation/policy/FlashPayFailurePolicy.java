@@ -6,24 +6,39 @@ import com.hmdp.shared.stateengine.model.StateTask;
 import com.hmdp.shared.stateengine.policy.FailurePolicy;
 
 /**
- * 无忧闪赔失败策略 — 失败后始终转人工审核。
+ * 无忧闪赔失败策略 — 可重试分层（2026-11-18，P4 兑现此前的演进注释）。
  *
- * <p>定位：无忧闪赔状态机层。闪赔场景下失败原因是业务数据问题
- * （如申诉原因为空、未配置金额规则、支付失败），重试无法自动修复，因此直接转人工。</p>
+ * <p>定位：无忧闪赔状态机层。失败按语义分层：</p>
+ * <ul>
+ *   <li><b>retryable=true</b>（基础设施类失败，如支付网关超时）且重试开关开启 →
+ *       返回 {@link RetryDecision#retry}——结合 RetryPolicy 的次数预算，
+ *       任务进入 FAILED 等待重试调度 Job 以退避节奏 resume（引擎的
+ *       claimForResume CAS 保证并发安全）。</li>
+ *   <li><b>其余失败</b>（申诉原因为空、无金额规则等数据/业务问题）→
+ *       manualReview，重试无意义。</li>
+ * </ul>
  *
- * <p>与秒杀对账的差异：秒杀对账的补偿失败通常是临时性故障（依赖服务暂不可用），
- * 适合重试；闪赔是数据校验问题，重试无意义。</p>
+ * <p>开关默认关：开启前置是支付幂等能力验证通过（InMemoryPayoutGateway 已按
+ * claimNo 幂等，可先用场景网关验证后开启）。开关关闭时行为与旧版完全一致。</p>
  */
 public class FlashPayFailurePolicy implements FailurePolicy {
 
-    @Override
-    public RetryDecision onFailure(StateTask task, NodeResult result) {
-        return RetryDecision.manualReview(result.getErrorMessage());
+    /** 可重试失败是否走自动重试（false = 失败一律转人工，旧语义） */
+    private final boolean retryEnabled;
+
+    public FlashPayFailurePolicy() {
+        this(false);
     }
 
-    // 未来演进（当前严格保持"失败一律转人工"）：
-    // 引入支付网关等基础设施后，可在此按 result.isRetryable() 分流：
-    //   retryable=true  → RetryDecision.retry(...)（由 RetryPolicy 控制次数预算，FAILED 等外部 resume）
-    //   retryable=false → RetryDecision.manualReview(...)（数据/业务问题，重试无意义）
-    // 本次不改，是为了保持既有语义与测试基线不变。
+    public FlashPayFailurePolicy(boolean retryEnabled) {
+        this.retryEnabled = retryEnabled;
+    }
+
+    @Override
+    public RetryDecision onFailure(StateTask task, NodeResult result) {
+        if (retryEnabled && result.isRetryable()) {
+            return RetryDecision.retry("retryable failure: " + result.getErrorCode());
+        }
+        return RetryDecision.manualReview(result.getErrorMessage());
+    }
 }

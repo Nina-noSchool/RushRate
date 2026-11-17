@@ -4,6 +4,8 @@ import com.hmdp.shared.stateengine.model.StateTask;
 import com.hmdp.shared.stateengine.model.StateTaskStatus;
 import com.hmdp.shared.stateengine.spi.StateTaskRepository;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -74,5 +76,20 @@ public class InMemoryStateTaskRepository implements StateTaskRepository {
             return existing;
         });
         return claimed[0];
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>内存实现：线性过滤 ConcurrentHashMap 的值集合（测试与小规模场景专用）。</p>
+     */
+    @Override
+    public List<StateTask> findByMachineCodeAndStatus(String machineCode, StateTaskStatus runtimeStatus) {
+        List<StateTask> result = new ArrayList<>();
+        for (StateTask task : storage.values()) {
+            if (task.getMachineCode().equals(machineCode) && task.getRuntimeStatus() == runtimeStatus) {
+                result.add(task);
+            }
+        }
+        return result;
     }
 }
