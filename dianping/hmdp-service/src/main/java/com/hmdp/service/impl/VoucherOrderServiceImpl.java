@@ -4,11 +4,13 @@ import cn.hutool.json.JSONUtil;
 import com.hmdp.shared.SeckillBugFlags;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.SeckillVoucherOrderMessage;
+import com.hmdp.entity.Voucher;
 import com.hmdp.entity.VoucherReconcileLog;
 import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherReconcileLogMapper;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
+import com.hmdp.service.IVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.hmdp.service.VoucherOrderCreateResult;
 import com.hmdp.shared.reconciliation.model.ReconcileBusinessType;
@@ -84,6 +86,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     /** 秒杀优惠券服务（DB 库存扣减） */
     @Resource
     private ISeckillVoucherService seckillVoucherService;
+
+    /** 优惠券服务（2026-11-19：按券类型下发限购语义——秒杀券一人一单，普通代金券可重复购买） */
+    @Resource
+    private IVoucherService voucherService;
 
     /** RocketMQ 原生模板（原始 MQ 操作） */
     @Resource
@@ -172,10 +178,20 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     public Result seckillVoucher(Long voucherId) {
         Long userId = UserHolder.getUser().getId();
         long orderId = redisIdWorker.nextId("order");
+        // 2026-11-19：按券类型下发限购语义——
+        //   秒杀券（type=1）：一人一单（稀缺性防黄牛）；
+        //   普通代金券（type=0）：常态销售，允许同用户重复购买。
+        // Lua 侧 limitOne 缺省 '1'，向后兼容历史调用。
+        String limitOne = "1";
+        Voucher voucher = voucherService.getById(voucherId);
+        if (voucher != null && java.util.Objects.equals(voucher.getType(), 0)) {
+            limitOne = "0";
+        }
         Long result = stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
                 Collections.emptyList(),
-                voucherId.toString(), userId.toString(), String.valueOf(orderId)
+                voucherId.toString(), userId.toString(), String.valueOf(orderId),
+                limitOne
         );
         int r = 0;
         if (result != null) {

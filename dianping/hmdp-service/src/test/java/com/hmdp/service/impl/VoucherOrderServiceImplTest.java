@@ -17,6 +17,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -224,5 +225,63 @@ class VoucherOrderServiceImplTest {
 
         assertEquals(100, stock);
         verify(seckillVoucherService).getById(13L);
+    }
+
+    // ---- 限购语义分层（2026-11-19）：普通代金券可重复购买，秒杀券一人一单 ----
+    // Lua 第 4 参 limitOne 的传参语义由 VM 实弹验证背书（普通券连买成功 + 秒杀券一人一单拦截），
+    // 这里验证 Java 侧的类型查询与结果映射链路不炸、消息映射正确。
+
+    @Test
+    void seckillVoucher_normalVoucher_surfacesLuaResult() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
+        RedisIdWorker redisIdWorker = mock(RedisIdWorker.class);
+        com.hmdp.service.IVoucherService voucherService = mock(com.hmdp.service.IVoucherService.class);
+        ReflectionTestUtils.setField(service, "stringRedisTemplate", stringRedisTemplate);
+        ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
+        ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        UserDTO user = new UserDTO();
+        user.setId(9L);
+        UserHolder.saveUser(user);
+        when(redisIdWorker.nextId("order")).thenReturn(101L);
+        com.hmdp.entity.Voucher voucher = new com.hmdp.entity.Voucher();
+        voucher.setId(18L);
+        voucher.setType(0);
+        when(voucherService.getById(18L)).thenReturn(voucher);
+        when(stringRedisTemplate.execute(any(), any(), any(Object[].class))).thenReturn(1L);
+
+        Result result = service.seckillVoucher(18L);
+
+        // Lua 返回 1（库存不足）→ 映射为业务失败；链路含类型查询与参数下发
+        assertFalse(result.getSuccess());
+        assertEquals("库存不足", result.getErrorMsg());
+        verify(voucherService).getById(18L);
+    }
+
+    @Test
+    void seckillVoucher_seckillVoucher_surfacesLuaResult() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
+        RedisIdWorker redisIdWorker = mock(RedisIdWorker.class);
+        com.hmdp.service.IVoucherService voucherService = mock(com.hmdp.service.IVoucherService.class);
+        ReflectionTestUtils.setField(service, "stringRedisTemplate", stringRedisTemplate);
+        ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
+        ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        UserDTO user = new UserDTO();
+        user.setId(9L);
+        UserHolder.saveUser(user);
+        when(redisIdWorker.nextId("order")).thenReturn(101L);
+        com.hmdp.entity.Voucher voucher = new com.hmdp.entity.Voucher();
+        voucher.setId(17L);
+        voucher.setType(1);
+        when(voucherService.getById(17L)).thenReturn(voucher);
+        when(stringRedisTemplate.execute(any(), any(), any(Object[].class))).thenReturn(2L);
+
+        Result result = service.seckillVoucher(17L);
+
+        // Lua 返回 2（重复下单拦截）→ 映射为"不能重复下单"
+        assertFalse(result.getSuccess());
+        assertEquals("不能重复下单", result.getErrorMsg());
+        verify(voucherService).getById(17L);
     }
 }
