@@ -390,11 +390,18 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Transactional
     public void createVoucherOrder(VoucherOrder voucherOrder) {
         Long userId = voucherOrder.getUserId();
-        // MyBatis-Plus 3.5 起 count() 返回 Long
-        long count = query().eq("user_id", userId).eq("voucher_id", voucherOrder.getVoucherId()).count();
-        if (count > 0) {
-            log.error("用户已经购买过一次了");
-            return;
+        // 2026-11-19：一人一单 DB 拦截按券类型分层——
+        //   秒杀券（type=1）：一人一单（与 Lua 一人一单、限购语义一致）；
+        //   普通代金券（type=0）：常态销售允许重复购买，不做一人一单拦截。
+        Voucher voucher = voucherService.getById(voucherOrder.getVoucherId());
+        boolean seckillVoucherType = voucher != null && java.util.Objects.equals(voucher.getType(), 1);
+        if (seckillVoucherType) {
+            // MyBatis-Plus 3.5 起 count() 返回 Long
+            long count = query().eq("user_id", userId).eq("voucher_id", voucherOrder.getVoucherId()).count();
+            if (count > 0) {
+                log.error("用户已经购买过一次了");
+                return;
+            }
         }
         boolean success = seckillVoucherService
                 .update()
