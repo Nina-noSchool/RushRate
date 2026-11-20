@@ -205,7 +205,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         order.setUserId(userId);
         order.setVoucherId(voucherId);
         proxy = (IVoucherOrderService) AopContext.currentProxy();
-        proxy.createVoucherOrder(order);
+        // 2026-11-21 幽灵单治理：建单拦截结果透传——一人一单命中 / DB 库存不足直接返回失败，
+        // 不再"静默吞单后照样报成功"（原版 hmdp 遗留缺陷）。
+        Result createResult = proxy.createVoucherOrder(order);
+        if (createResult != null && !createResult.getSuccess()) {
+            return createResult;
+        }
         return Result.ok(orderId);
     }
 
@@ -386,9 +391,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      *
      * <p>在一人一单锁保护下，校验重复购买 → DB库存扣减 → 订单入库。
      * 库存扣减和订单入库在同一事务中，但没有对账追踪。</p>
+     *
+     * <p>2026-11-21 幽灵单治理：拦截不再静默吞单。原版 hmdp 在一人一单命中 / DB 库存不足时
+     * 仅打日志后 return，外层照样返回"成功+订单号"，用户拿到查无实据的幽灵单。
+     * 现在两处拦截都返回失败结果，由调用方透传。</p>
      */
     @Transactional
-    public void createVoucherOrder(VoucherOrder voucherOrder) {
+    public Result createVoucherOrder(VoucherOrder voucherOrder) {
         Long userId = voucherOrder.getUserId();
         // 2026-11-19：一人一单 DB 拦截按券类型分层——
         //   秒杀券（type=1）：一人一单（与 Lua 一人一单、限购语义一致）；
@@ -400,7 +409,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             long count = query().eq("user_id", userId).eq("voucher_id", voucherOrder.getVoucherId()).count();
             if (count > 0) {
                 log.error("用户已经购买过一次了");
-                return;
+                return Result.fail("不能重复下单");
             }
         }
         boolean success = seckillVoucherService
@@ -411,9 +420,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 .update();
         if (!success) {
             log.error("库存不足");
-            return;
+            return Result.fail("库存不足");
         }
         save(voucherOrder);
+        return Result.ok();
     }
 
     /**
@@ -515,6 +525,24 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Override
     public boolean existsVoucherOrder(Long orderId) {
         return getBaseMapper().selectById(orderId) != null;
+    }
+
+    /**
+     * 查询订单（仅限属主）—— 前端轮询建单结果的只读端点。
+     * <p>2026-11-21：秒杀Plus的"处理中"语义需要订单状态可查；
+     * 订单不存在 / 非本人订单均拒绝，不暴露他人订单（越权防护与申诉工作台同风格）。</p>
+     */
+    @Override
+    public Result queryVoucherOrderOwned(Long orderId) {
+        Long userId = UserHolder.getUser().getId();
+        VoucherOrder order = getBaseMapper().selectById(orderId);
+        if (order == null) {
+            return Result.fail("订单不存在");
+        }
+        if (!java.util.Objects.equals(order.getUserId(), userId)) {
+            return Result.fail("无权查看该订单");
+        }
+        return Result.ok(order);
     }
 
     /** 递归斐波那契 — CPU密集型，用于模拟"热点数据预热" */

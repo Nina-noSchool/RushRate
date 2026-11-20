@@ -52,10 +52,13 @@ public interface IVoucherOrderService extends IService<VoucherOrder> {
      * 在 {@code @Transactional} 事务中完成：一人一单校验 → DB 乐观锁扣减库存 → 订单入库。
      * 由 Redisson 分布式锁（见 {@link #handleVoucherOrder}）保证同一用户不会并发建单。
      * </p>
+     * <p>2026-11-21 幽灵单治理：拦截不再静默吞单——一人一单命中 / DB 库存不足
+     * 均返回失败结果，由调用方透传给用户（不再出现"假成功+幽灵订单号"）。</p>
      *
      * @param voucherOrder 待创建的优惠券订单
+     * @return 建单结果：成功返回 ok；一人一单命中返回"不能重复下单"；DB 库存不足返回"库存不足"
      */
-    void createVoucherOrder(VoucherOrder voucherOrder);
+    Result createVoucherOrder(VoucherOrder voucherOrder);
 
     /**
      * 秒杀Plus的异步建单方法（由 MQ 消费者调用）
@@ -94,6 +97,18 @@ public interface IVoucherOrderService extends IService<VoucherOrder> {
      * @return {@code true} 存在，{@code false} 不存在
      */
     boolean existsVoucherOrder(Long orderId);
+
+    /**
+     * 查询订单（仅限属主）
+     * <p>
+     * 为前端轮询建单结果提供只读端点：订单不存在 / 非本人订单均返回失败，
+     * 不暴露他人订单信息（与申诉工作台的属主校验同一防护风格）。
+     * </p>
+     *
+     * @param orderId 订单 ID
+     * @return 属主订单实体；订单不存在返回"订单不存在"，越权返回"无权查看该订单"
+     */
+    Result queryVoucherOrderOwned(Long orderId);
 
     /**
      * Redisson 分布式锁保护下的订单创建（原始秒杀使用）

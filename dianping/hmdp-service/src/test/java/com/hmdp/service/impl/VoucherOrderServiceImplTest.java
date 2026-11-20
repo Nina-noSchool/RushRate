@@ -258,4 +258,61 @@ class VoucherOrderServiceImplTest {
         assertEquals("不能重复下单", result.getErrorMsg());
         verify(voucherService).getById(17L);
     }
+
+    // ---- 订单属主查询（2026-11-21）：前端轮询建单结果的只读端点 ----
+    // 秒杀Plus"处理中"语义要求订单状态可查；不存在/越权均拒绝，不暴露他人订单。
+
+    @Test
+    void queryVoucherOrderOwned_shouldReturnOrderForOwner() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        VoucherOrderMapper voucherOrderMapper = mock(VoucherOrderMapper.class);
+        ReflectionTestUtils.setField(service, "baseMapper", voucherOrderMapper);
+        UserDTO user = new UserDTO();
+        user.setId(9L);
+        UserHolder.saveUser(user);
+        com.hmdp.entity.VoucherOrder order = new com.hmdp.entity.VoucherOrder();
+        order.setId(101L);
+        order.setUserId(9L);
+        when(voucherOrderMapper.selectById(101L)).thenReturn(order);
+
+        Result result = service.queryVoucherOrderOwned(101L);
+
+        assertTrue(result.getSuccess());
+        assertEquals(order, result.getData());
+    }
+
+    @Test
+    void queryVoucherOrderOwned_shouldRejectForeignOrder() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        VoucherOrderMapper voucherOrderMapper = mock(VoucherOrderMapper.class);
+        ReflectionTestUtils.setField(service, "baseMapper", voucherOrderMapper);
+        UserDTO user = new UserDTO();
+        user.setId(8L);
+        UserHolder.saveUser(user);
+        com.hmdp.entity.VoucherOrder order = new com.hmdp.entity.VoucherOrder();
+        order.setId(101L);
+        order.setUserId(9L);
+        when(voucherOrderMapper.selectById(101L)).thenReturn(order);
+
+        Result result = service.queryVoucherOrderOwned(101L);
+
+        assertFalse(result.getSuccess());
+        assertEquals("无权查看该订单", result.getErrorMsg());
+    }
+
+    @Test
+    void queryVoucherOrderOwned_shouldFailWhenOrderMissing() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        VoucherOrderMapper voucherOrderMapper = mock(VoucherOrderMapper.class);
+        ReflectionTestUtils.setField(service, "baseMapper", voucherOrderMapper);
+        UserDTO user = new UserDTO();
+        user.setId(9L);
+        UserHolder.saveUser(user);
+        when(voucherOrderMapper.selectById(101L)).thenReturn(null);
+
+        Result result = service.queryVoucherOrderOwned(101L);
+
+        assertFalse(result.getSuccess());
+        assertEquals("订单不存在", result.getErrorMsg());
+    }
 }
