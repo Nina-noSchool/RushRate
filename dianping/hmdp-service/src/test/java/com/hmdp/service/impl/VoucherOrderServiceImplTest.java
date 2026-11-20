@@ -33,35 +33,9 @@ class VoucherOrderServiceImplTest {
         UserHolder.removeUser();
     }
 
-    @Test
-    void seckillVoucherPlus_shouldRollbackRedisStateWhenMessageSendFails() {
-        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
-        StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
-        RedisIdWorker redisIdWorker = mock(RedisIdWorker.class);
-        RocketMQTemplate rocketMQTemplate = mock(RocketMQTemplate.class);
-        RocketMqReliablePublisher reliablePublisher = mock(RocketMqReliablePublisher.class);
-        ReflectionTestUtils.setField(service, "stringRedisTemplate", stringRedisTemplate);
-        ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
-        ReflectionTestUtils.setField(service, "rocketMQTemplate", rocketMQTemplate);
-        ReflectionTestUtils.setField(service, "rocketMqReliablePublisher", reliablePublisher);
-
-        UserDTO user = new UserDTO();
-        user.setId(9L);
-        UserHolder.saveUser(user);
-        when(redisIdWorker.nextId("order")).thenReturn(101L);
-        when(stringRedisTemplate.execute(any(), eq(Collections.emptyList()), eq("7"), eq("9"), eq("101"),
-                eq("trace-101"), any(), any()))
-                .thenReturn(0L);
-        when(reliablePublisher.publish(eq("SECKILL_ORDER_CREATE"), eq("seckill-plus-order-topic:order-create"), any()))
-                .thenReturn(false);
-
-        Result result = service.seckillVoucherPlus(7L);
-
-        assertTrue(!result.getSuccess());
-        assertEquals("下单人数过多，请重试", result.getErrorMsg());
-        verify(stringRedisTemplate, times(2)).execute(any(), eq(Collections.emptyList()), eq("7"), eq("9"),
-                eq("101"), eq("trace-101"), any(), any());
-    }
+    // 2026-11-19 R2 定案：原 seckillVoucherPlus_shouldRollbackRedisStateWhenMessageSendFails
+    // 已被语义反转删除——发送失败不再回滚，改"处理中"语义。反转后的断言见
+    // VoucherOrderProcessingSemanticsTest（不回滚 + 订单号返回 + 幂等入口）。
 
     @Test
     void seckillVoucherPlus_shouldRejectFrequentRequests() {

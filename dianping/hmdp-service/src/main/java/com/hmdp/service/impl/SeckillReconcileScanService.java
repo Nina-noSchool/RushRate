@@ -4,9 +4,11 @@ import cn.hutool.core.util.NumberUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.hmdp.entity.MqEventRecord;
 import com.hmdp.entity.SeckillReconcileTask;
 import com.hmdp.entity.VoucherOrder;
 import com.hmdp.entity.VoucherReconcileLog;
+import com.hmdp.mapper.MqEventRecordMapper;
 import com.hmdp.mapper.SeckillReconcileTaskMapper;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.mapper.VoucherReconcileLogMapper;
@@ -41,7 +43,12 @@ public class SeckillReconcileScanService {
     private final VoucherOrderMapper voucherOrderMapper;
     private final VoucherReconcileLogMapper voucherReconcileLogMapper;
     private final MetricsRecorder metricsRecorder;
+    /** Redis 字符串模板（第三向扫描 Redis 追踪日志用） */
     private final StringRedisTemplate stringRedisTemplate;
+
+    /** MQ 事件记录仓储（R2 定案联动：消息在途时 trace 方向保守静默）。可选：测试未装配时为 null */
+    @Autowired(required = false)
+    private MqEventRecordMapper mqEventRecordMapper;
     private final int scanBatchSize;
     private final int scanDelayMinutes;
     private final int compensationMaxRetryCount;
@@ -178,6 +185,18 @@ public class SeckillReconcileScanService {
     private void scanTraceLogs() {
         if (!traceScanEnabled) {
             return;
+        }
+        // R2 定案联动（2026-11-19）：发送失败不回滚改"处理中"后，消息在途 = 常态中间态——
+        // 存在 PENDING_RETRY 消息时，"Redis 扣了 DB 无痕"是暂态而非异常：本轮保守静默
+        // （宁可漏报等下一轮——消息 30s 重投、耗尽转 FAILED 后由告警与对账接管），心跳照打（扫描器存活语义不变）
+        if (mqEventRecordMapper != null) {
+            Long pendingMq = mqEventRecordMapper.selectCount(
+                    new QueryWrapper<MqEventRecord>().eq("event_status", "PENDING_RETRY"));
+            if (pendingMq != null && pendingMq > 0) {
+                log.info("trace scan skipped this round: pending mq events in flight, count={}", pendingMq);
+                metricsRecorder.markTraceScanSuccess();
+                return;
+            }
         }
         int budget = scanBatchSize;
         try (Cursor<String> keys = stringRedisTemplate.scan(

@@ -216,13 +216,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * <ul>
      *   <li>Redis Lua 脚本增加了请求去重和 trace 记录</li>
      *   <li>通过 RocketMQ 异步建单，解耦 Redis 扣减和 DB 持久化</li>
-     *   <li>MQ 发送失败时自动回滚 Redis 库存</li>
+     *   <li><b>发送失败不回滚 Redis</b>（2026-11-19 R2 定案）：扣减成功的事实单向兑现——
+     *       返回订单号让用户轮询（"处理中"语义），由消息表重投 / 恢复任务 / 对账三层保证最终补单；
+     *       一人一单标记保留，用户重复点击被 Lua 幂等入口（返回码 5）拦截，不会二次扣减</li>
      *   <li>发送延时消息用于超时关单</li>
      *   <li>通过校验任务确认订单与 DEDUCT 日志最终一致</li>
      * </ul></p>
      *
      * @param voucherId 秒杀优惠券ID
-     * @return 秒杀结果，成功返回 orderId
+     * @return 秒杀结果：成功或处理中，均返回 orderId（前端轮询订单状态）
      */
     @Override
     public Result seckillVoucherPlus(Long voucherId) {
@@ -243,7 +245,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         );
         int r = result == null ? -1 : result.intValue();
         if (r != 0) {
-            return Result.fail(r == 1 ? "库存不足" : r == 2 ? "不能重复下单" : r == 3 ? "请求过于频繁，请稍后重试" : "秒杀库存未初始化");
+            // R2 定案：一人一单命中（r=5）= 系统已记住这次参与，首次点击的消息/建单
+            // 由三层保证兜底——幂等返回处理中语义，而非报错
+            if (r == 5) {
+                return Result.ok("您已参与，订单处理中");
+            }
+            return Result.fail(r == 1 ? "库存不足" : r == 3 ? "请求过于频繁，请稍后重试" : "秒杀库存未初始化");
         }
 
         // ========== 埋点：JVM问题注入（由SeckillBugConfig开关控制） ==========
@@ -277,7 +284,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         order.setVoucherId(voucherId);
         order.setTraceId(traceId);
 
-        // ========== 1) 构造消息（失败时尚未发出任何消息，可以安全回滚 Redis） ==========
+        // ========== 1) 构造消息（本地构造失败 = 系统性缺陷：扣减无法兑现成订单，回滚是正确语义） ==========
         SeckillVoucherOrderMessage message;
         String payload;
         try {
@@ -289,7 +296,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("下单人数过多，请重试");
         }
 
-        // ========== 2) 可靠MQ发送：失败时自动持久化到DB等待重试 ==========
+        // ========== 2) 可靠MQ发送（2026-11-19 R2 定案：扣减成功的事实单向兑现） ==========
+        // 发送失败（publish false / 抛异常）不再回滚 Redis——返回订单号让用户轮询（"处理中"语义），
+        // 由三层保证最终补单：
+        //   ① publish 内部失败已落本地消息表（PENDING_RETRY，30s 重投，耗尽转 FAILED 告警人工）
+        //   ② 落表也失败（DB 不可用）时 Redis trace log 是唯一证据——对账 trace 方向兜底
+        //   ③ 一人一单标记保留 → 用户重复点击被 Lua 幂等入口（返回码 5）拦截，不会二次扣减
+        // 乐观返回订单号：publish 抛异常也可能发生在"已发出、响应未达"——乐观轮询，对账兜底兜住真丢失。
         boolean sent;
         try {
             sent = rocketMqReliablePublisher.publish(
@@ -298,15 +311,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     payload
             );
         } catch (Exception e) {
-            // publish 内部落库兜底也失败（如 DB 不可用）：消息未确认发出，回滚 Redis
-            log.error("publish seckill plus order message failed, orderId={}", orderId, e);
-            rollbackAfterPublishFailure(order);
-            return Result.fail("下单人数过多，请重试");
+            log.error("publish seckill plus order message failed, orderId={} (kept, queued by reconciliation if lost)", orderId, e);
+            return Result.ok(orderId);
         }
         if (!sent) {
-            // MQ发送失败 → 回滚Redis库存，用户可重试；回滚失败落库告警，不改变用户可重试语义
-            rollbackAfterPublishFailure(order);
-            return Result.fail("下单人数过多，请重试");
+            // 发送失败但已落本地消息表（PENDING_RETRY）→ 30s 重投，订单最终建成；
+            // 用户拿订单号轮询 = "处理中"体验，不存在"以为失败实际下单"的错位
+            log.warn("publish seckill plus order message failed, queued for retry, orderId={}", orderId);
+            return Result.ok(orderId);
         }
 
         // ========== 3) 消息已发出：以下步骤 best-effort，任何失败都不再回滚 Redis ==========
@@ -356,8 +368,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     /**
      * 发布失败路径的统一收口 —— 回滚 Redis 预扣，回滚再失败则落账本。
-     * <p>只在 order-create 消息确认未发出时调用；消息一旦确认发出，后续异常一律不回滚
-     * （见 {@link #seckillVoucherPlus} 步骤 3 的说明）。</p>
+     * <p>2026-11-19 R2 定案后唯一调用点 = 消息构造失败（本地系统性缺陷：扣减无法兑现成订单，
+     * 此时回滚是正确语义）。发送失败不再走此方法——发送失败改"处理中"语义，由
+     * 消息表重投 / 恢复任务 / 对账三层保证最终补单（见 {@link #seckillVoucherPlus} 步骤 2）。</p>
      */
     private void rollbackAfterPublishFailure(VoucherOrder order) {
         try {

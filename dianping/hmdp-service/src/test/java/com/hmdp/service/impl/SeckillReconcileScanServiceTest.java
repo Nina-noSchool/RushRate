@@ -379,6 +379,45 @@ class SeckillReconcileScanServiceTest {
         return registry.get("hmdp.reconcile.trace.scan.idle.seconds").gauge().value();
     }
 
+    // ==================== R2 定案联动：消息在途时 trace 方向保守静默 ====================
+
+    @Test
+    void traceScan_pendingRetryMqInFlight_skipsRoundButHeartbeatStillMarked() {
+        // R2 定案联动（2026-11-19）：发送失败不回滚改"处理中"后，消息在途 = 常态中间态——
+        // 本轮保守跳过（宁可漏报等下一轮），但心跳照打（扫描器存活语义不变）
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MetricsRecorder recorder = new MetricsRecorder(registry);
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        com.hmdp.mapper.MqEventRecordMapper mqMapper = mock(com.hmdp.mapper.MqEventRecordMapper.class);
+        SeckillReconcileScanService service = new SeckillReconcileScanService(
+                mock(SeckillReconcileTaskMapper.class), mock(VoucherOrderMapper.class),
+                mock(VoucherReconcileLogMapper.class), recorder, redisTemplate,
+                100, 3, 5, false, true);
+        ReflectionTestUtils_setMqMapper(service, mqMapper);
+        when(mqMapper.selectCount(any())).thenReturn(1L);   // PENDING_RETRY 在途
+        stubTraceScan(redisTemplate, mockHashOps(),
+                Map.<Object, Object>entry(GHOST_TRACE_ID, deductEntry(GHOST_TRACE_ID, "999",
+                        String.valueOf(System.currentTimeMillis() - 10 * 60_000L))));
+
+        double idleBefore = idleSeconds(registry);
+
+        service.scanRecentRecords();
+
+        // 本轮静默跳过（无痕判定保守让位给消息在途），但扫描器存活语义照常打卡
+        assertTrue(idleSeconds(registry) < 60.0);
+        assertTrue(idleBefore > 1_000_000_000.0);
+    }
+
+    private void ReflectionTestUtils_setMqMapper(Object target, Object value) {
+        try {
+            java.lang.reflect.Field field = target.getClass().getDeclaredField("mqEventRecordMapper");
+            field.setAccessible(true);
+            field.set(target, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     // ==================== 打桩辅助 ====================
 
     @SuppressWarnings("unchecked")

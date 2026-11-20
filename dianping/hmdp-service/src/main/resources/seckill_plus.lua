@@ -54,9 +54,12 @@ if stock <= 0 then
 end
 
 -- 第4步：一人一单校验 — 检查该用户是否已在此券的已购集合中
+-- 2026-11-19 R2 定案：命中返回 5（已参与，处理中）——
+--   首次点击的消息/建单链路由三层保证兜底（消息表重投/恢复任务/对账），
+--   用户重复点击时 sismember 命中 = 系统已记住这次参与，幂等返回而非报错
 if redis.call('sismember', orderKey, userId) == 1 then
     redis.call('del', requestKey)  -- 清理去重标记
-    return 2
+    return 5
 end
 
 -- 第5步：原子扣减库存并记录用户
