@@ -30,7 +30,7 @@ class VoucherOrderControllerTest {
 
     @Test
     void seckillVoucherPlus_shouldDelegateVoucherIdToService() throws Exception {
-        when(voucherOrderService.seckillVoucherPlus(7L)).thenReturn(Result.ok(101L));
+        when(voucherOrderService.seckillVoucherPlus(7L, null)).thenReturn(Result.ok(101L));
 
         mockMvc.perform(post("/voucher-order/seckill-plus/7"))
                 .andExpect(status().isOk())
@@ -38,7 +38,7 @@ class VoucherOrderControllerTest {
                 // 2026-11-21：雪花订单号超出 JS 安全整数（2^53），控制器统一转 String 下发防丢精度
                 .andExpect(jsonPath("$.data").value("101"));
 
-        verify(voucherOrderService).seckillVoucherPlus(7L);
+        verify(voucherOrderService).seckillVoucherPlus(7L, null);
     }
 
     @Test

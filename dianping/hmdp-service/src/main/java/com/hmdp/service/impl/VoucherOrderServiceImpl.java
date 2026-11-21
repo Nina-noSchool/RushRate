@@ -19,6 +19,7 @@ import com.hmdp.shared.reconciliation.model.ReconcileBusinessType;
 import com.hmdp.shared.reconciliation.model.ReconcileLogType;
 import com.hmdp.shared.reconciliation.model.ReconciliationStatus;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import org.springframework.beans.factory.annotation.Value;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
@@ -238,8 +239,23 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * @return 秒杀结果：成功或处理中，均返回 orderId（前端轮询订单状态）
      */
     @Override
-    public Result seckillVoucherPlus(Long voucherId) {
+    public Result seckillVoucherPlus(Long voucherId, String accessToken) {
         Long userId = UserHolder.getUser().getId();
+
+        // 0a. 售罄短路（2026-11-21 批次）：首次库存不足后本地标记 TTL 内直接拒绝，
+        //     洪峰下售罄请求连 Redis 都不打——保护语义与限流互补（限流挡水位、短路挡无效流量）
+        if (isSoldOutLocally(voucherId)) {
+            log.info("sold-out short-circuit hit, voucherId={}", voucherId);
+            return Result.fail("库存不足，已售罄");
+        }
+
+        // 0b. 令牌前置校验（2026-11-21 批次）：开关开启时须持有效抢购资格令牌（一次性消费）
+        if (accessTokenEnabled) {
+            if (!consumeAccessToken(voucherId, userId, accessToken)) {
+                return Result.fail("请先获取抢购资格");
+            }
+        }
+
         long orderId = redisIdWorker.nextId("order");
         String traceId = "trace-" + orderId;
 
@@ -261,7 +277,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             if (r == 5) {
                 return Result.ok("您已参与，订单处理中");
             }
-            return Result.fail(r == 1 ? "库存不足" : r == 3 ? "请求过于频繁，请稍后重试" : "秒杀库存未初始化");
+            if (r == 1) {
+                // 售罄标记：TTL 内后续请求走本地短路，不再打 Redis
+                markSoldOut(voucherId);
+                return Result.fail("库存不足");
+            }
+            return Result.fail(r == 3 ? "请求过于频繁，请稍后重试" : "秒杀库存未初始化");
         }
 
         // ========== 埋点：JVM问题注入（由SeckillBugConfig开关控制） ==========
@@ -540,6 +561,74 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Override
     public boolean existsVoucherOrder(Long orderId) {
         return getBaseMapper().selectById(orderId) != null;
+    }
+
+    /**
+     * 售罄本地标记（2026-11-21 批次）：voucherId → 首次售罄时间戳。
+     * TTL 内后续请求走本地短路；补货后最多 TTL 时长自动恢复（演示环境够用，
+     * 生产可用管理端点主动清除）。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Long> soldOutAt = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 售罄标记存活时长（毫秒），默认 5 分钟 */
+    @Value("${seckill.sold-out.mark-ttl-ms:300000}")
+    private long soldOutMarkTtlMs;
+
+    /** 令牌前置开关：开启时 seckillPlus 须持有效抢购资格令牌（默认关，实弹演示用启动参数覆盖） */
+    @Value("${seckill.access-token.enabled:false}")
+    private boolean accessTokenEnabled;
+
+    /** 令牌有效期（秒）：开抢前领取，10 分钟内有效 */
+    private static final long ACCESS_TOKEN_TTL_SECONDS = 600;
+
+    /** 资格令牌 Lua：一次性消费——GET 比对后 DEL，防重复使用 */
+    private static final DefaultRedisScript<Long> ACCESS_TOKEN_SCRIPT;
+
+    static {
+        ACCESS_TOKEN_SCRIPT = new DefaultRedisScript<>();
+        ACCESS_TOKEN_SCRIPT.setLocation(new ClassPathResource("lua/seckill_access_token.lua"));
+        ACCESS_TOKEN_SCRIPT.setResultType(Long.class);
+    }
+
+    private boolean isSoldOutLocally(Long voucherId) {
+        Long soldAt = soldOutAt.get(voucherId);
+        if (soldAt == null) {
+            return false;
+        }
+        if (System.currentTimeMillis() - soldAt > soldOutMarkTtlMs) {
+            soldOutAt.remove(voucherId);
+            return false;
+        }
+        return true;
+    }
+
+    private void markSoldOut(Long voucherId) {
+        soldOutAt.put(voucherId, System.currentTimeMillis());
+    }
+
+    private boolean consumeAccessToken(Long voucherId, Long userId, String accessToken) {
+        if (accessToken == null || accessToken.isEmpty()) {
+            return false;
+        }
+        String key = "seckill:access:token:" + voucherId + ":" + userId;
+        Long consumed = stringRedisTemplate.execute(
+                ACCESS_TOKEN_SCRIPT,
+                Collections.singletonList(key),
+                accessToken
+        );
+        return consumed != null && consumed == 1L;
+    }
+
+    @Override
+    public String issueAccessToken(Long voucherId) {
+        Long userId = UserHolder.getUser().getId();
+        if (seckillVoucherService.getById(voucherId) == null) {
+            return null;
+        }
+        String token = cn.hutool.core.util.IdUtil.fastSimpleUUID();
+        String key = "seckill:access:token:" + voucherId + ":" + userId;
+        stringRedisTemplate.opsForValue().set(key, token, ACCESS_TOKEN_TTL_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        return token;
     }
 
     /**

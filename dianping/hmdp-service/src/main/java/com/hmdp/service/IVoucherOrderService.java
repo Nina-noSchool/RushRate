@@ -38,16 +38,28 @@ public interface IVoucherOrderService extends IService<VoucherOrder> {
      * <p>
      * 完整链路：RedisIdWorker 生成 orderId → Redis Lua 原子校验（请求去重 + 库存 + 一人一单）
      * → 可靠 MQ 发送建单消息 → 发送延时关单消息 → 返回 orderId。
-     * MQ 发送失败时自动回滚 Redis 库存。
+     * 2026-11-19 R2 定案：发送失败不回滚 Redis，返回"处理中"语义，三层兜底补单。
      * </p>
+     * <p>2026-11-21 批次：入口增加本地售罄短路（首次库存不足后 5 分钟内不打 Redis）
+     * 与令牌前置校验（开关 {@code seckill.access-token.enabled} 开启时，须持有效抢购资格令牌）。</p>
      *
-     * @param voucherId 秒杀优惠券 ID
+     * @param voucherId  秒杀优惠券 ID
+     * @param accessToken 抢购资格令牌（开关关闭时传 null）
      * @return 秒杀结果，成功时返回 orderId
      */
-    Result seckillVoucherPlus(Long voucherId);
+    Result seckillVoucherPlus(Long voucherId, String accessToken);
 
     /**
-     * 原始秒杀的同步建单方法（已废弃）
+     * 发放抢购资格令牌（2026-11-21 批次：令牌前置授权——开抢前领资格，抢购时一次性消费）。
+     * <p>同一用户对同一券重复领取时覆盖旧令牌；令牌有效期 10 分钟。</p>
+     *
+     * @param voucherId 秒杀优惠券 ID
+     * @return 令牌字符串（写入请求头 X-Seckill-Token）
+     */
+    String issueAccessToken(Long voucherId);
+
+    /**
+     * 查询订单（仅限属主）
      * <p>
      * 在 {@code @Transactional} 事务中完成：一人一单校验 → DB 乐观锁扣减库存 → 订单入库。
      * 由 Redisson 分布式锁（见 {@link #handleVoucherOrder}）保证同一用户不会并发建单。

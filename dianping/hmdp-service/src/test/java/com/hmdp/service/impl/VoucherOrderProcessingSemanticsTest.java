@@ -51,7 +51,7 @@ class VoucherOrderProcessingSemanticsTest {
         // publish 为 mock 默认值（false = 发送失败，发布器内部已落本地消息表），无需显式 stub
         VoucherOrderServiceImpl service = serviceWith(101L, 0L);
 
-        Result result = service.seckillVoucherPlus(7L);
+        Result result = service.seckillVoucherPlus(7L, null);
 
         // 处理中语义：success + 订单号返回，绝不回滚已扣减的事实
         assertTrue(result.getSuccess());
@@ -63,7 +63,7 @@ class VoucherOrderProcessingSemanticsTest {
         // Lua 一人一单命中 → 新码 5：系统已记住这次参与，幂等返回"处理中"而非报错
         VoucherOrderServiceImpl service = serviceWith(102L, 5L);
 
-        Result result = service.seckillVoucherPlus(7L);
+        Result result = service.seckillVoucherPlus(7L, null);
 
         assertTrue(result.getSuccess());
         assertEquals("您已参与，订单处理中", result.getData());

@@ -7,6 +7,7 @@ import com.hmdp.service.IVoucherOrderService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -55,8 +56,23 @@ public class VoucherOrderController {
     @PostMapping("seckill-plus/{id}")
     @RateLimit(key = "'voucher:' + #voucherId", capacity = 50, ratePerSec = 20,
             message = "抢购人数过多，请稍后重试")
-    public Result seckillVoucherPlus(@PathVariable("id") Long voucherId) {
-        return stringifyOrderId(voucherOrderService.seckillVoucherPlus(voucherId));
+    public Result seckillVoucherPlus(@PathVariable("id") Long voucherId,
+                                     @RequestHeader(value = "X-Seckill-Token", required = false) String accessToken) {
+        return stringifyOrderId(voucherOrderService.seckillVoucherPlus(voucherId, accessToken));
+    }
+
+    /**
+     * 抢购资格令牌发放（2026-11-21 批次：令牌前置授权）
+     * <p>开抢前领取；抢购时经请求头 {@code X-Seckill-Token} 携带，Lua 一次性消费。
+     * 开关 {@code seckill.access-token.enabled} 关闭时不校验。</p>
+     */
+    @PostMapping("seckill-token/{id}")
+    public Result issueSeckillToken(@PathVariable("id") Long voucherId) {
+        String token = voucherOrderService.issueAccessToken(voucherId);
+        if (token == null) {
+            return Result.fail("券不存在");
+        }
+        return Result.ok(token);
     }
 
     /**

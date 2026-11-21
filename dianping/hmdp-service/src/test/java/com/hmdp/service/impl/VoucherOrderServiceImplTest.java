@@ -55,7 +55,7 @@ class VoucherOrderServiceImplTest {
                 eq("trace-101"), any(), any()))
                 .thenReturn(3L);
 
-        Result result = service.seckillVoucherPlus(7L);
+        Result result = service.seckillVoucherPlus(7L, null);
 
         assertTrue(!result.getSuccess());
         assertEquals("请求过于频繁，请稍后重试", result.getErrorMsg());
@@ -103,7 +103,7 @@ class VoucherOrderServiceImplTest {
         when(reliablePublisher.publishDelay(eq("SECKILL_ORDER_TIMEOUT"), eq("seckill-plus-order-topic:order-timeout"), any(), eq(15)))
                 .thenReturn(true);
 
-        Result result = service.seckillVoucherPlus(7L);
+        Result result = service.seckillVoucherPlus(7L, null);
 
         assertTrue(result.getSuccess());
         assertEquals(101L, result.getData());
@@ -144,7 +144,7 @@ class VoucherOrderServiceImplTest {
         when(reliablePublisher.publishDelay(eq("SECKILL_ORDER_TIMEOUT"), eq("seckill-plus-order-topic:order-timeout"), any(), eq(15)))
                 .thenReturn(true);
 
-        Result result = service.seckillVoucherPlus(7L);
+        Result result = service.seckillVoucherPlus(7L, null);
 
         assertTrue(result.getSuccess());
         assertEquals(101L, result.getData());
@@ -181,7 +181,7 @@ class VoucherOrderServiceImplTest {
         doThrow(new RuntimeException("db timeout"))
                 .when(verificationService).createPendingTask(anyLong(), anyLong(), anyLong(), anyString());
 
-        Result result = service.seckillVoucherPlus(7L);
+        Result result = service.seckillVoucherPlus(7L, null);
 
         // 订单消息已发出 → 后续步骤失败也不回滚 Redis，用户照常拿到订单号
         assertTrue(result.getSuccess());
