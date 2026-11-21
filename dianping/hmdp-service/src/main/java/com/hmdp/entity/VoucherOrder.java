@@ -13,7 +13,12 @@ import java.io.Serializable;
 import java.time.LocalDateTime;
 
 /**
- * 优惠券订单实体 — 秒杀/普通购买的核心订单模型。
+ * 秒杀订单实体 — 秒杀域订单模型（2026-11-21 业务分表）。
+ *
+ * <p>2026-11-21 分表：秒杀单（洪水，走 MQ/对账/关单域）与普通券单（涓流，同步直插，
+ * 允许复购）垂直拆分。本实体对应 tb_seckill_order，携带秒杀域全部生命周期字段，
+ * 并由 uk_user_voucher 唯一索引提供一人一单的 DB 级最终防线；
+ * 普通券单由 {@link NormalOrder}（tb_normal_order 瘦表）承载。</p>
  *
  * <p>秒杀Plus流程中，订单ID由 RedisIdWorker（秒级时间戳 + Redis 自增序列）在 Redis Lua 执行前预生成，
  * 保证即使在分布式环境下也能唯一标识一笔订单。</p>
@@ -28,7 +33,7 @@ import java.time.LocalDateTime;
 @Data
 @EqualsAndHashCode(callSuper = false)
 @Accessors(chain = true)
-@TableName("tb_voucher_order")
+@TableName("tb_seckill_order")
 public class VoucherOrder implements Serializable {
 
     private static final long serialVersionUID = 1L;

@@ -7,8 +7,10 @@ import com.hmdp.dto.SeckillVoucherOrderMessage;
 import com.hmdp.entity.Voucher;
 import com.hmdp.entity.VoucherReconcileLog;
 import com.hmdp.entity.VoucherOrder;
+import com.hmdp.entity.NormalOrder;
 import com.hmdp.mapper.VoucherReconcileLogMapper;
 import com.hmdp.mapper.VoucherOrderMapper;
+import com.hmdp.mapper.NormalOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherService;
 import com.hmdp.service.IVoucherOrderService;
@@ -122,6 +124,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     /** 回滚失败记录服务（同包，回滚失败时落库 + 告警，批次1 ④） */
     @Resource
     private RollbackFailureService rollbackFailureService;
+
+    /** 普通券订单 Mapper（2026-11-21 业务分表：普通券单落 tb_normal_order，允许复购） */
+    @Autowired(required = false)
+    private NormalOrderMapper normalOrderMapper;
 
     /** 原始秒杀Lua脚本（seckill.lua） */
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
@@ -422,6 +428,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.error("库存不足");
             return Result.fail("库存不足");
         }
+        // 2026-11-21 业务分表：普通券单落 tb_normal_order 瘦表（允许复购，无唯一约束）；
+        // 秒杀券单落 tb_seckill_order（uk_user_voucher 唯一索引作一人一单的 DB 级最终防线）。
+        if (!seckillVoucherType) {
+            normalOrderMapper.insert(new NormalOrder()
+                    .setId(voucherOrder.getId())
+                    .setUserId(voucherOrder.getUserId())
+                    .setVoucherId(voucherOrder.getVoucherId()));
+            return Result.ok();
+        }
         save(voucherOrder);
         return Result.ok();
     }
@@ -531,13 +546,25 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * 查询订单（仅限属主）—— 前端轮询建单结果的只读端点。
      * <p>2026-11-21：秒杀Plus的"处理中"语义需要订单状态可查；
      * 订单不存在 / 非本人订单均拒绝，不暴露他人订单（越权防护与申诉工作台同风格）。</p>
+     * <p>2026-11-21 业务分表：秒杀单查 tb_seckill_order，查不到时回退查
+     * tb_normal_order（普通券单，旧端点同步直插）。</p>
      */
     @Override
     public Result queryVoucherOrderOwned(Long orderId) {
         Long userId = UserHolder.getUser().getId();
         VoucherOrder order = getBaseMapper().selectById(orderId);
         if (order == null) {
-            return Result.fail("订单不存在");
+            if (normalOrderMapper == null) {
+                return Result.fail("订单不存在");
+            }
+            NormalOrder normalOrder = normalOrderMapper.selectById(orderId);
+            if (normalOrder == null) {
+                return Result.fail("订单不存在");
+            }
+            if (!java.util.Objects.equals(normalOrder.getUserId(), userId)) {
+                return Result.fail("无权查看该订单");
+            }
+            return Result.ok(normalOrder);
         }
         if (!java.util.Objects.equals(order.getUserId(), userId)) {
             return Result.fail("无权查看该订单");

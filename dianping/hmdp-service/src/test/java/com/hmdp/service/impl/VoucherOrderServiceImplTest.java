@@ -4,7 +4,9 @@ import com.hmdp.dto.UserDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.SeckillVoucherOrderMessage;
 import com.hmdp.entity.SeckillVoucher;
+import com.hmdp.entity.NormalOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
+import com.hmdp.mapper.NormalOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
@@ -311,6 +313,82 @@ class VoucherOrderServiceImplTest {
         when(voucherOrderMapper.selectById(101L)).thenReturn(null);
 
         Result result = service.queryVoucherOrderOwned(101L);
+
+        assertFalse(result.getSuccess());
+        assertEquals("订单不存在", result.getErrorMsg());
+    }
+
+    // ---- 业务分表（2026-11-21）：秒杀单落 tb_seckill_order，普通券单落 tb_normal_order ----
+
+    @Test
+    void createVoucherOrder_normalVoucher_shouldInsertIntoNormalOrderTable() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        ISeckillVoucherService seckillVoucherService = mock(ISeckillVoucherService.class);
+        com.hmdp.service.IVoucherService voucherService = mock(com.hmdp.service.IVoucherService.class);
+        NormalOrderMapper normalOrderMapper = mock(NormalOrderMapper.class);
+        VoucherOrderMapper baseMapper = mock(VoucherOrderMapper.class);
+        ReflectionTestUtils.setField(service, "seckillVoucherService", seckillVoucherService);
+        ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        ReflectionTestUtils.setField(service, "normalOrderMapper", normalOrderMapper);
+        ReflectionTestUtils.setField(service, "baseMapper", baseMapper);
+
+        com.hmdp.entity.Voucher voucher = new com.hmdp.entity.Voucher().setId(18L).setType(0);
+        when(voucherService.getById(18L)).thenReturn(voucher);
+        com.baomidou.mybatisplus.extension.conditions.update.UpdateChainWrapper chain =
+                mock(com.baomidou.mybatisplus.extension.conditions.update.UpdateChainWrapper.class);
+        doReturn(chain).when(chain).setSql(anyString());
+        doReturn(chain).when(chain).eq(anyString(), any());
+        doReturn(chain).when(chain).gt(anyString(), any());
+        doReturn(true).when(chain).update();
+        doReturn(chain).when(seckillVoucherService).update();
+
+        com.hmdp.entity.VoucherOrder order = new com.hmdp.entity.VoucherOrder()
+                .setId(201L).setUserId(9L).setVoucherId(18L);
+
+        Result result = service.createVoucherOrder(order);
+
+        // 普通券单 → tb_normal_order 瘦表（允许复购），不落秒杀表
+        assertTrue(result.getSuccess());
+        verify(normalOrderMapper).insert(argThat((NormalOrder n) ->
+                Long.valueOf(201L).equals(n.getId())
+                        && Long.valueOf(9L).equals(n.getUserId())
+                        && Long.valueOf(18L).equals(n.getVoucherId())));
+        verify(baseMapper, never()).insert(org.mockito.ArgumentMatchers.<com.hmdp.entity.VoucherOrder>any());
+    }
+
+    @Test
+    void queryVoucherOrderOwned_shouldFallbackToNormalOrderTable() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        VoucherOrderMapper voucherOrderMapper = mock(VoucherOrderMapper.class);
+        NormalOrderMapper normalOrderMapper = mock(NormalOrderMapper.class);
+        ReflectionTestUtils.setField(service, "baseMapper", voucherOrderMapper);
+        ReflectionTestUtils.setField(service, "normalOrderMapper", normalOrderMapper);
+        UserDTO user = new UserDTO();
+        user.setId(9L);
+        UserHolder.saveUser(user);
+        when(voucherOrderMapper.selectById(301L)).thenReturn(null);
+        NormalOrder normalOrder = new NormalOrder().setId(301L).setUserId(9L).setVoucherId(18L);
+        when(normalOrderMapper.selectById(301L)).thenReturn(normalOrder);
+
+        Result result = service.queryVoucherOrderOwned(301L);
+
+        // 秒杀表查不到 → 回退查普通券单表
+        assertTrue(result.getSuccess());
+        assertEquals(normalOrder, result.getData());
+    }
+
+    @Test
+    void queryVoucherOrderOwned_shouldNotNpeWhenNormalMapperMissing() {
+        VoucherOrderServiceImpl service = new VoucherOrderServiceImpl();
+        VoucherOrderMapper voucherOrderMapper = mock(VoucherOrderMapper.class);
+        ReflectionTestUtils.setField(service, "baseMapper", voucherOrderMapper);
+        UserDTO user = new UserDTO();
+        user.setId(9L);
+        UserHolder.saveUser(user);
+        when(voucherOrderMapper.selectById(301L)).thenReturn(null);
+
+        // normalOrderMapper 未注入（对账模块未启用等场景）→ 降级为"订单不存在"，不 NPE
+        Result result = service.queryVoucherOrderOwned(301L);
 
         assertFalse(result.getSuccess());
         assertEquals("订单不存在", result.getErrorMsg());
