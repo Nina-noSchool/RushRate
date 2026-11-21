@@ -8,6 +8,7 @@ import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.User;
 import com.hmdp.entity.UserInfo;
+import com.hmdp.ratelimit.RateLimit;
 import com.hmdp.service.IUserInfoService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.UserHolder;
@@ -58,6 +59,8 @@ public class UserController {
      * @return 发送结果
      */
     @PostMapping("code")
+    @RateLimit(key = "'ip:' + #ip", capacity = 10, ratePerSec = 5,
+            message = "验证码请求过于频繁，请稍后重试")
     public Result sendCode(@RequestParam("phone") String phone, HttpSession session) {
         return userService.sendCode(phone,session);
     }

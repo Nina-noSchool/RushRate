@@ -2,6 +2,7 @@ package com.hmdp.controller;
 
 
 import com.hmdp.dto.Result;
+import com.hmdp.ratelimit.RateLimit;
 import com.hmdp.service.IVoucherOrderService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -52,6 +53,8 @@ public class VoucherOrderController {
      * @return 秒杀结果
      */
     @PostMapping("seckill-plus/{id}")
+    @RateLimit(key = "'voucher:' + #voucherId", capacity = 50, ratePerSec = 20,
+            message = "抢购人数过多，请稍后重试")
     public Result seckillVoucherPlus(@PathVariable("id") Long voucherId) {
         return stringifyOrderId(voucherOrderService.seckillVoucherPlus(voucherId));
     }
