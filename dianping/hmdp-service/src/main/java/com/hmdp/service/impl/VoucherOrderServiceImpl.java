@@ -493,11 +493,32 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 .setStatus(com.hmdp.shared.reconciliation.model.VoucherOrderStatus.UNPAID)
                 .setCreateTime(LocalDateTime.now());
 
-        // 1. 先插入订单 — 主键冲突说明是重复消息，幂等忽略
+        // 1. 先插入订单 — DuplicateKeyException 不携带约束名，主键冲突与 uk_user_voucher 冲突
+        //    抛的是同一个异常类，必须回查 DB 定性（2026-11-22 缺口修复）：
+        //    ① 按 orderId 回查命中 → 主键冲突 = 同一笔订单的消息重投 → DUPLICATE 幂等忽略
+        //    ② orderId 未命中、user+voucher 回查命中 → 唯一索引冲突 = Redis 一人一单标记失效后
+        //       多扣的那笔（新 orderId 撞已有订单）→ USER_VOUCHER_CONFLICT，消费端回滚 Redis 库存
+        //    ③ 两级都查不到 → 测试数据撞 id 等极端场景，保守按消息重投忽略
         try {
             save(voucherOrder);
         } catch (DuplicateKeyException e) {
-            log.info("duplicate voucher order ignored, orderId={}, userId={}, voucherId={}",
+            if (getBaseMapper().selectById(voucherOrder.getId()) != null) {
+                log.info("duplicate voucher order ignored (pk conflict = redelivery), orderId={}, userId={}, voucherId={}",
+                        voucherOrder.getId(), voucherOrder.getUserId(), voucherOrder.getVoucherId());
+                return VoucherOrderCreateResult.DUPLICATE;
+            }
+            VoucherOrder existing = getBaseMapper().selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<VoucherOrder>()
+                            .eq(VoucherOrder::getUserId, voucherOrder.getUserId())
+                            .eq(VoucherOrder::getVoucherId, voucherOrder.getVoucherId())
+                            .last("LIMIT 1"));
+            if (existing != null) {
+                log.warn("user-voucher unique conflict: redis one-order mark lost, this deduction is extra, "
+                        + "orderId={}, existingOrderId={}, userId={}, voucherId={}",
+                        voucherOrder.getId(), existing.getId(), voucherOrder.getUserId(), voucherOrder.getVoucherId());
+                return VoucherOrderCreateResult.USER_VOUCHER_CONFLICT;
+            }
+            log.info("duplicate voucher order ignored (conflict row vanished, treated as redelivery), orderId={}, userId={}, voucherId={}",
                     voucherOrder.getId(), voucherOrder.getUserId(), voucherOrder.getVoucherId());
             return VoucherOrderCreateResult.DUPLICATE;
         }

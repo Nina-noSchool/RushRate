@@ -6,7 +6,10 @@ package com.hmdp.service;
  * <p>各结果含义：
  * <ul>
  *   <li><b>CREATED</b> — 订单创建成功，库存扣减完成，后续写入对账追踪</li>
- *   <li><b>DUPLICATE</b> — 重复订单（主键冲突），幂等忽略，不做回滚</li>
+ *   <li><b>DUPLICATE</b> — 重复订单（主键冲突 = 同一笔订单的消息重投），幂等忽略，不做回滚</li>
+ *   <li><b>USER_VOUCHER_CONFLICT</b> — 用户+券唯一索引冲突（2026-11-22 缺口修复）：
+ *       Redis 一人一单标记失效（如主从切换丢数据）后多扣的那笔撞上已有订单——
+ *       这笔 Redis 扣减是幽灵预占，消费端必须回滚 Redis 并告警暴露防线失效，与 DUPLICATE 严格区分</li>
  *   <li><b>OUT_OF_STOCK</b> — DB库存不足，事务回滚，需调用 rollbackSeckillVoucherPlus 回退 Redis 库存</li>
  *   <li><b>ROLLBACK_FAILED</b> — 回滚操作失败，留给对账引擎兜底处理
  *       <p><i>⚠️ 预留扩展枚举：当前业务链路中无代码 return 此值，
@@ -18,6 +21,7 @@ package com.hmdp.service;
 public enum VoucherOrderCreateResult {
     CREATED,
     DUPLICATE,
+    USER_VOUCHER_CONFLICT,
     OUT_OF_STOCK,
     ROLLBACK_FAILED
 }

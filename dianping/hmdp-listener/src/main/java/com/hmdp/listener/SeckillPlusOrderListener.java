@@ -230,6 +230,23 @@ public class SeckillPlusOrderListener implements RocketMQListener<String>, Rocke
             log.info("duplicate seckill plus order message ignored, orderId={}", order.getId());
             return;
         }
+        // 分支 4：USER_VOUCHER_CONFLICT（2026-11-22 缺口修复）—— Redis 一人一单标记失效后
+        // 多扣的那笔撞上已有订单（新 orderId 撞 uk_user_voucher）。这笔 Redis 扣减是幽灵预占：
+        // ① 回滚 Redis（复用 governance rollback，写 RESTORE 日志后对账看到的仍是完整闭环，
+        //    不依赖默认关闭的 trace-scan）；② 指标计数 + warn 暴露"Redis 防线失效"这一灾备信号；
+        // ③ 业务性冲突，ack 不重试（重试无意义）。
+        if (result == VoucherOrderCreateResult.USER_VOUCHER_CONFLICT) {
+            log.warn("user-voucher conflict: redis one-order mark lost, rolling back the extra deduction, orderId={}", order.getId());
+            metricsRecorder.incUserVoucherConflict();
+            try {
+                voucherOrderService.rollbackSeckillVoucherPlus(order);
+            } catch (Exception rollbackEx) {
+                log.error("seckill plus rollback failed on user-voucher conflict, orderId={}", order.getId(), rollbackEx);
+                rollbackFailureService.record(RollbackFailureService.SOURCE_LISTENER,
+                        order, "REDIS_EXECUTE_ERROR", 1, rollbackEx);
+            }
+            return;
+        }
         // 正路径：建单成功，打完日志就完了
         log.info("seckill plus order created, orderId={}", order.getId());
     }

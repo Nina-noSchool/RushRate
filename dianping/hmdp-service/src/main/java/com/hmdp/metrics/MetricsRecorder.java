@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *   hmdp.recovery.manual.review  恢复任务转人工审核              OrderCreateRecoveryService.moveToManualReview
  *   hmdp.reconcile.anomaly       对账扫描产生的异常工单          SeckillReconcileScanService.createTaskIfAbsent
  *   hmdp.ratelimit.rejected      滑动窗口限流拒绝请求            SlidingWindowInterceptor（批次1 ①）
+ *   hmdp.user.voucher.conflict   用户+券唯一索引冲突回滚          SeckillPlusOrderListener USER_VOUCHER_CONFLICT 分支（2026-11-22）
  *   hmdp.consume.batch.error     消费端批量处理单条异常          SeckillPlusOrderListener 批量 catch 分支
  * </pre></p>
  */
@@ -40,6 +41,7 @@ public class MetricsRecorder {
     private final Counter recoveryManualReview;
     private final Counter reconcileAnomaly;
     private final Counter ratelimitRejected;
+    private final Counter userVoucherConflict;
     private final Counter consumeBatchError;
     /**
      * 追踪日志对账扫描最近一轮成功的时刻（epoch millis，0 = 从未成功）。
@@ -55,6 +57,7 @@ public class MetricsRecorder {
         this.recoveryManualReview = counter(registry, "hmdp.recovery.manual.review", "恢复任务转人工审核次数");
         this.reconcileAnomaly = counter(registry, "hmdp.reconcile.anomaly", "对账扫描产生的异常工单数");
         this.ratelimitRejected = counter(registry, "hmdp.ratelimit.rejected", "滑动窗口限流拒绝请求数");
+        this.userVoucherConflict = counter(registry, "hmdp.user.voucher.conflict", "用户+券唯一索引冲突回滚次数（Redis一人一单标记失效的灾备信号）");
         this.consumeBatchError = counter(registry, "hmdp.consume.batch.error", "消费端批量处理单条异常次数");
         // 心跳 gauge：以 AtomicLong 为状态源（本类字段强引用持有，规避 micrometer 弱引用回收）。
         // 0 时刻注册保证 Prometheus 侧无空窗；从未成功时 age ≈ now - 0（天文数字），语义即"从未活着"
@@ -101,6 +104,11 @@ public class MetricsRecorder {
     /** 滑动窗口限流拒绝一次秒杀请求（429） */
     public void incRatelimitRejected() {
         ratelimitRejected.increment();
+    }
+
+    /** 用户+券唯一索引冲突（Redis 一人一单标记失效的灾备信号），消费端已回滚多扣的库存 */
+    public void incUserVoucherConflict() {
+        userVoucherConflict.increment();
     }
 
     /** 消费端批量处理中单条消息异常（转恢复任务的分支） */
