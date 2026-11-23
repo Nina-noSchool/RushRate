@@ -31,6 +31,9 @@ public class RollbackFailureService {
     /** 触发来源：消费端（OUT_OF_STOCK 回滚失败） */
     public static final String SOURCE_LISTENER = "LISTENER";
 
+    /** 触发来源：超时关单兜底（restoreRedisReservation 回滚账本与集合不一致） */
+    public static final String SOURCE_TIMEOUT = "TIMEOUT";
+
     /** 告警状态：待处理 */
     public static final String ALERT_PENDING = "PENDING";
 

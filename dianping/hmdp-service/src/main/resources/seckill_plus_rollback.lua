@@ -18,11 +18,21 @@
 --   seckill:stock:{voucherId}        - 秒杀库存
 --   seckill:order:{voucherId}        - 已下单用户集合
 --   seckill:req:{voucherId}:{userId}  - 请求去重标记
---   seckill:trace:log:{voucherId}    - 对账追踪日志（Hash）
+--   seckill:trace:log:{voucherId}    - 对账追踪日志（Hash，field=traceId）
 --
--- 幂等性保证：
---   通过检查 traceLog 中是否已存在 RESTORE 类型的日志来防止重复回滚
---   如果之前已经回滚过，则跳过库存恢复，仅清理请求标记
+-- 返回值（四态，Java 侧 VoucherOrderServiceImpl 必须用同一份语义）：
+--    1  - 真回补了：账本 DEDUCT，INCRBY 已执行，账本已覆盖为 RESTORE
+--    2  - 幂等命中：账本已是 RESTORE，历史已回滚，无需操作
+--    0  - 账本查无此笔：没有 DEDUCT 记录，压根没扣过，无需回补
+--   -1  - 异常不一致：账本是 DEDUCT 但用户已不在集合中（removed=0）。
+--         库存仍已回补、账本仍已覆盖为 RESTORE；但集合成员与账本对不上，
+--         Java 侧必须走 rollback_failure_log + 告警，不能静默吞掉。
+--
+-- 幂等与回补依据：
+--   以 trace 账本（HGET traceLogKey traceId）的 logType 为唯一依据，
+--   不再用 SREM 返回值推断"扣减是否发生过"。Set 成员与库存计数是两个独立状态，
+--   会被独立修改（主从切换丢标记/运维操作），代理关系不可靠。
+--   账本 field=traceId 单值覆盖：同一 traceId 只可能是 DEDUCT 或 RESTORE 之一。
 -- ============================================================================
 
 local voucherId = ARGV[1]
@@ -37,46 +47,58 @@ local orderKey = 'seckill:order:' .. voucherId
 local requestKey = 'seckill:req:' .. voucherId .. ':' .. userId
 local traceLogKey = 'seckill:trace:log:' .. voucherId
 
--- 幂等检查：如果该 traceId 已经执行过 RESTORE，说明已回滚过，不再重复操作
+-- 1) 读账本，判断这笔是 DEDUCT / RESTORE / 不存在
 local previousTrace = redis.call('hget', traceLogKey, traceId)
+local previous = nil
 if previousTrace then
-    local previous = cjson.decode(previousTrace)
-    if previous['logType'] == 'RESTORE' then
-        redis.call('del', requestKey)
-        return 0
-    end
+    previous = cjson.decode(previousTrace)
 end
 
--- 回滚操作：将用户从已购集合移除，恢复库存
--- srem 返回1表示用户确实在集合中被移除了（正常回滚路径）
--- srem 返回0表示用户不在集合中（可能订单从未创建成功，或不一致场景）
+-- 2) 幂等命中：账本已是 RESTORE → 历史回滚过，正常跳过
+if previous and previous['logType'] == 'RESTORE' then
+    redis.call('del', requestKey)
+    return 2
+end
+
+-- 3) 账本查无此笔：没有扣减可回补（异常调用，但无库存影响）
+if not previous then
+    redis.call('del', requestKey)
+    return 0
+end
+
+-- 4) 账本是 DEDUCT → 真回补。依据账本而非 SREM 返回值决定是否 INCRBY。
 local removed = redis.call('srem', orderKey, userId)
 local currentStock = tonumber(redis.call('get', stockKey))
-if removed == 1 then
-    if currentStock == nil then
-        currentStock = 0
-    end
-    local beforeQty = currentStock
-    local afterQty = beforeQty + 1
-    redis.call('incrby', stockKey, 1)   -- 库存 +1
-
-    -- 记录 RESTORE 类型对账追踪日志，标记本次回滚
-    local logEntry = cjson.encode({
-        traceId = traceId,
-        orderId = orderId,
-        userId = userId,
-        voucherId = voucherId,
-        beforeQty = beforeQty,
-        changeQty = 1,
-        afterQty = afterQty,
-        logType = 'RESTORE',
-        ts = nowMillis
-    })
-    redis.call('hset', traceLogKey, traceId, logEntry)
-    if ttlSeconds ~= nil and ttlSeconds > 0 then
-        redis.call('expire', traceLogKey, ttlSeconds)
-    end
+if currentStock == nil then
+    currentStock = 0
 end
+local beforeQty = currentStock
+local afterQty = beforeQty + 1
+redis.call('incrby', stockKey, 1)
+
+-- 账本覆盖为 RESTORE，标记本次回滚（同一 field 覆盖写）
+local logEntry = cjson.encode({
+    traceId = traceId,
+    orderId = orderId,
+    userId = userId,
+    voucherId = voucherId,
+    beforeQty = beforeQty,
+    changeQty = 1,
+    afterQty = afterQty,
+    logType = 'RESTORE',
+    ts = nowMillis
+})
+redis.call('hset', traceLogKey, traceId, logEntry)
+if ttlSeconds ~= nil and ttlSeconds > 0 then
+    redis.call('expire', traceLogKey, ttlSeconds)
+end
+
 -- 清理请求去重标记，允许用户后续重试
 redis.call('del', requestKey)
-return 0
+
+-- 5) removed=0 说明集合成员与账本对不上（Redis 防线失效的信号）。
+--    库存已回补、账本已覆盖，但必须让 Java 侧告警，不能静默。
+if removed == 0 then
+    return -1
+end
+return 1

@@ -6,9 +6,11 @@ import com.hmdp.entity.VoucherReconcileLog;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.mapper.VoucherReconcileLogMapper;
 import com.hmdp.service.ISeckillVoucherService;
+import com.hmdp.service.impl.RollbackFailureService;
 import com.hmdp.shared.reconciliation.model.ReconcileBusinessType;
 import com.hmdp.shared.reconciliation.model.ReconcileLogType;
 import com.hmdp.shared.reconciliation.model.ReconciliationStatus;
+import com.hmdp.shared.reconciliation.model.RollbackResultCode;
 import com.hmdp.shared.reconciliation.model.VoucherOrderStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,6 +34,10 @@ public class SeckillOrderTimeoutService {
 
     @Autowired(required = false)
     private StringRedisTemplate stringRedisTemplate;
+
+    /** 回滚异常告警出口（账本与集合不一致时留痕，不写 RESTORE 制造假证据） */
+    @Resource
+    private RollbackFailureService rollbackFailureService;
 
     /**
      * 定时关单兜底 —— 秒杀订单创建后 15 分钟未支付则自动取消并恢复库存。
@@ -99,7 +105,7 @@ public class SeckillOrderTimeoutService {
             return;
         }
         String traceId = order.getTraceId() == null ? "trace-" + order.getId() : order.getTraceId();
-        stringRedisTemplate.execute(
+        Long raw = stringRedisTemplate.execute(
                 new org.springframework.data.redis.core.script.DefaultRedisScript<Long>() {{
                     setLocation(new org.springframework.core.io.ClassPathResource("seckill_plus_rollback.lua"));
                     setResultType(Long.class);
@@ -112,15 +118,26 @@ public class SeckillOrderTimeoutService {
                 String.valueOf(2 * 24 * 60 * 60L),
                 String.valueOf(System.currentTimeMillis())
         );
-        voucherReconcileLogMapper.insert(new VoucherReconcileLog()
-                .setOrderId(order.getId())
-                .setUserId(order.getUserId())
-                .setVoucherId(order.getVoucherId())
-                .setTraceId(traceId)
-                .setChangeQty(1)
-                .setLogType(ReconcileLogType.RESTORE)
-                .setBusinessType(ReconcileBusinessType.TIMEOUT)
-                .setReconciliationStatus(ReconciliationStatus.PENDING)
-                .setDetail("timeout close fallback"));
+        // 与 VoucherOrderServiceImpl 主回滚路径共用同一份四态语义（RollbackResultCode）。
+        // 只有"真回补"才写 DB RESTORE 日志，避免"没回补也写 RESTORE"制造假证据污染第三向扫描。
+        RollbackResultCode code = RollbackResultCode.fromCode(raw == null ? 0L : raw);
+        if (code == RollbackResultCode.RESTORED) {
+            voucherReconcileLogMapper.insert(new VoucherReconcileLog()
+                    .setOrderId(order.getId())
+                    .setUserId(order.getUserId())
+                    .setVoucherId(order.getVoucherId())
+                    .setTraceId(traceId)
+                    .setChangeQty(1)
+                    .setLogType(ReconcileLogType.RESTORE)
+                    .setBusinessType(ReconcileBusinessType.TIMEOUT)
+                    .setReconciliationStatus(ReconciliationStatus.PENDING)
+                    .setDetail("timeout close fallback"));
+        } else if (code == RollbackResultCode.INCONSISTENT) {
+            // 账本 DEDUCT 但用户不在集合：库存已由 Lua 回补、账本已覆盖为 RESTORE，
+            // 这里只做告警留痕，不写 RESTORE 制造"已闭环"假象。
+            rollbackFailureService.record(RollbackFailureService.SOURCE_TIMEOUT,
+                    order, "TRACE_DEDUCT_BUT_SREM_ZERO", 1, null);
+        }
+        // ALREADY_RESTORED 幂等命中、NO_DEDUCT 账本无此笔：均不写 RESTORE。
     }
 }

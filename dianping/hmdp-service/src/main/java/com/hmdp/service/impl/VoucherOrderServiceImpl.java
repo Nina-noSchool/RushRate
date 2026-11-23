@@ -18,6 +18,7 @@ import com.hmdp.service.VoucherOrderCreateResult;
 import com.hmdp.shared.reconciliation.model.ReconcileBusinessType;
 import com.hmdp.shared.reconciliation.model.ReconcileLogType;
 import com.hmdp.shared.reconciliation.model.ReconciliationStatus;
+import com.hmdp.shared.reconciliation.model.RollbackResultCode;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.beans.factory.annotation.Value;
 import com.hmdp.utils.RedisIdWorker;
@@ -142,6 +143,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private static final String SECKILL_PLUS_TIMEOUT_DESTINATION = "seckill-plus-order-topic:order-timeout";
     /** Redis trace 在 Redis 中的 TTL（2天），过期后不再参与建单校验 */
     private static final long SECKILL_TRACE_TTL_SECONDS = 2 * 24 * 60 * 60L;
+    // 回滚 Lua 四态返回码见 domain 层 RollbackResultCode（与 seckill_plus_rollback.lua 头部注释同一份语义）
     /**
      * 死锁埋点用 — 两把静态锁，按 userId 奇偶决定加锁顺序，故意制造锁顺序不一致以触发死锁。
      * 由 {@link com.hmdp.shared.SeckillBugFlags#DEADLOCK} 开关控制是否启用。
@@ -567,13 +569,22 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      *   <li>其他需要回退Redis库存的异常</li>
      * </ul></p>
      *
-     * <p>执行 seckill_plus_rollback.lua 恢复库存并在Redis中记录RESTORE日志，
-     * 同时在DB中写入RESTORE对账日志。</p>
+     * <p>执行 seckill_plus_rollback.lua 恢复库存。Lua 按 trace 账本返回四态，
+     * 只有"真回补"(1) 才写 DB RESTORE 对账日志——避免"没回补也写 RESTORE"制造假证据；
+     * 异常不一致(-1) 库存已回补但不写 RESTORE，改由 rollback_failure_log + 指标告警暴露。</p>
      */
     @Override
     public void rollbackSeckillVoucherPlus(VoucherOrder voucherOrder) {
-        executeGovernanceRollback(voucherOrder);
-        saveRestoreReconcileLog(voucherOrder, ReconcileBusinessType.FAIL, "rollback triggered");
+        RollbackResultCode code = executeGovernanceRollback(voucherOrder);
+        if (code == RollbackResultCode.RESTORED) {
+            saveRestoreReconcileLog(voucherOrder, ReconcileBusinessType.FAIL, "rollback triggered");
+        } else if (code == RollbackResultCode.INCONSISTENT) {
+            // 账本 DEDUCT 但用户不在集合：Redis 防线失效的信号。
+            // 库存与账本已被 Lua 修正，这里只做告警留痕，不写 RESTORE 制造"已闭环"假象。
+            rollbackFailureService.record(RollbackFailureService.SOURCE_MAIN_CHAIN,
+                    voucherOrder, "TRACE_DEDUCT_BUT_SREM_ZERO", 1, null);
+        }
+        // ALREADY_RESTORED 幂等命中、NO_DEDUCT 账本无此笔：均不写 RESTORE。
     }
 
     /**
@@ -709,12 +720,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     /**
-     * 执行Redis回滚 — 调用 seckill_plus_rollback.lua 恢复库存。
+     * 执行Redis回滚 — 调用 seckill_plus_rollback.lua 恢复库存，返回 Lua 四态码。
      *
-     * <p>Lua脚本内部有幂等保护：如果该traceId已经RESTORE过，不会重复回滚。</p>
+     * <p>Lua 以 trace 账本为判断依据（不再用 SREM 返回值推断扣减是否发生），
+     * 返回 1 真回补 / 2 幂等命中 / 0 账本无此笔 / -1 账本与集合不一致。
+     * 调用方必须按码分支决定写不写 RESTORE、走不走告警。</p>
      */
-    private void executeGovernanceRollback(VoucherOrder voucherOrder) {
-        stringRedisTemplate.execute(
+    private RollbackResultCode executeGovernanceRollback(VoucherOrder voucherOrder) {
+        Long result = stringRedisTemplate.execute(
                 SECKILL_PLUS_ROLLBACK_SCRIPT,
                 Collections.emptyList(),
                 voucherOrder.getVoucherId().toString(),
@@ -724,6 +737,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 String.valueOf(SECKILL_TRACE_TTL_SECONDS),
                 String.valueOf(System.currentTimeMillis())
         );
+        // RedisTemplate 理论上不返回 null，但防御性兜底：视作"账本无此笔"，不写 RESTORE
+        return RollbackResultCode.fromCode(result == null ? 0L : result);
     }
 
     /** 读取DB当前库存（用于对账日志记录 beforeQty） */
