@@ -83,7 +83,30 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if (shopBloomFilter != null && !shopBloomFilter.mightContain(id)) {
             return Result.fail("店铺不存在！");
         }
-        /*缓存穿透
+        Shop shop = queryShopNoBloomGuard(id);
+        if(shop==null){
+
+            return Result.fail("店铺不存在！");
+        }
+        return Result.ok(shop);
+
+    }
+
+    /**
+     * 不带布隆守卫的店铺基础查询，供商详链路复用（批次：商详接缓存）。
+     * <p>与 {@link #queryById(Long)} 共用同一条多级缓存链路（L1 → L2 逻辑过期 → DB），
+     * 但跳过布隆前置守卫：布隆只在启动/每日 rebuild 时全量同步，新增店铺在下次 rebuild
+     * 前会被误判为"不存在"。商详 base 只要 DB 里存在的店铺，不能因为布隆重建滞后返回空页，
+     * 故走这里；穿透防护由 {@code loadOnMiss} 的空值标记 + 互斥锁兜底。</p>
+     * <p>查不到返回 null，语义与 {@code getById} 一致，由调用方决定如何解包。</p>
+     */
+    public Shop queryShopNoBloomGuard(Long id) {
+        return localCacheEnabled
+                ? multiLevelCacheService.queryWithLocalCache(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES)
+                : clientClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+    }
+
+    /*缓存穿透
         //Shop shop = queryWithPassThrough(id);
         //Shop shop = clientClient
                // .queryWithPassThrough(RedisConstants.CACHE_SHOP_KEY, id, Shop.class, this::getById, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
@@ -94,20 +117,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 //            return Result.fail("店铺不存在！");
 //        }
          */
-
-        //用逻辑过期解决缓存击穿
-        // Shop shop = queryWithLogicalExpire(id);
-        // 批次3 ②：默认走多级缓存（L1 本地 → L2 Redis 逻辑过期 → DB）；开关关闭则完全回退单级
-        Shop shop = localCacheEnabled
-                ? multiLevelCacheService.queryWithLocalCache(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES)
-                : clientClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
-        if(shop==null){
-
-            return Result.fail("店铺不存在！");
-        }
-        return Result.ok(shop);
-
-    }
 
       /*   public Shop queryWithLogicalExpire(Long id)   {
 //        //1.尝试从Redis查询商铺缓存

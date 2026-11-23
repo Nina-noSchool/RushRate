@@ -38,7 +38,7 @@ public class ShopDetailRepository implements com.hmdp.shopdetail.domain.reposito
 
     @Override
     public ShopDetailAggregate findBaseDetail(Long shopId) {
-        Shop shop = legacyShopQueryService.getShopById(shopId);
+        Shop shop = legacyShopQueryService.getShopByIdCached(shopId);
         ShopDetailAggregate aggregate = toAggregate(shop);
         // 基础标签和优惠券是详情页首屏最常用的信息，直接和基础信息一起返回。
         aggregate.setTags(buildTags(shop));
