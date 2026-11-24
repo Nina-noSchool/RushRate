@@ -66,4 +66,22 @@ class FlashPayPayloadTest {
         assertEquals("商家提前打烊，权益未兑现", restored.getReason());
         assertNull(restored.getVoucherId());
     }
+
+    @Test
+    void should_not_mistake_numeric_legacy_reason_as_voucher_id() {
+        // 老格式 planCode|reason，若 reason 恰好是纯数字（如用户填"123"），
+        // 不能把它误判成 voucherId——否则会拿 123 当券 ID 去查库，甚至误赔。
+        FlashPayPayload restored = FlashPayPayload.deserialize("FLASH_PAY|123");
+        assertEquals("FLASH_PAY", restored.getPlanCode());
+        assertEquals("123", restored.getReason());
+        assertNull(restored.getVoucherId());
+    }
+
+    @Test
+    void should_handle_null_payload_without_npe() {
+        // DB 里 payload 字段若为 NULL（脏数据/历史行），resume 时不能 NPE 卡死任务
+        FlashPayPayload restored = FlashPayPayload.deserialize(null);
+        assertNotNull(restored);
+        assertNull(restored.getVoucherId());
+    }
 }
