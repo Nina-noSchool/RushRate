@@ -54,7 +54,7 @@ bash prepare_seckill_test.sh 4000 13
 - 检查应用实例数为 0；
 - 调用 `reset_broker.sh` 把两个消费组的主 topic 和 `%RETRY%<group>`
   重试 topic 都重置到当前时间（只重置主 topic 会漏掉上一轮失败的重试消息）；
-- 清 `tb_voucher_order` / `tb_voucher_reconcile_log` /
+- 清 `tb_seckill_order` / `tb_voucher_reconcile_log` /
   `tb_order_create_verify_task` / `tb_order_create_recovery_task` /
   `tb_seckill_reconcile_task` / `tb_mq_event_record`；
 - 把 DB/Redis 库存都设为 4000；
@@ -229,7 +229,7 @@ results/20261027_101500_col3-jdk21-virtual/
 `hmdp-controller/src/main/resources/db/patch_benchmark_indexes.sql` 是可重复执行的
 存储过程版本（MySQL 8 没有 `CREATE INDEX IF NOT EXISTS`）。加索引的依据是实际 SQL：
 
-- `tb_voucher_order`：`create_time` 用于对账扫描，`voucher_id` 用于压测统计；
+- `tb_seckill_order`：`create_time` 用于对账扫描，`voucher_id` 用于压测统计；
 - `tb_order_create_verify_task` / `tb_order_create_recovery_task`：`voucher_id` 统计；
 - `tb_voucher_reconcile_log`：`(log_type, create_time)` 用于 DEDUCT 日志扫描。
 

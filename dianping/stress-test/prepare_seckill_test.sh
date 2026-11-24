@@ -96,14 +96,14 @@ echo "  连通性 OK，券存在"
 # ---- 3. 清理 DB 测试数据 ----
 echo ""
 echo "[2/8] 清理DB旧数据（券ID=${VOUCHER_ID}）..."
-OLD_ORDERS=$(query "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID}")
+OLD_ORDERS=$(query "SELECT COUNT(*) FROM tb_seckill_order WHERE voucher_id = ${VOUCHER_ID}")
 OLD_LOGS=$(query "SELECT COUNT(*) FROM tb_voucher_reconcile_log WHERE voucher_id = ${VOUCHER_ID}")
 OLD_VERIFY=$(query "SELECT COUNT(*) FROM tb_order_create_verify_task WHERE voucher_id = ${VOUCHER_ID}")
 OLD_RECOVERY=$(query "SELECT COUNT(*) FROM tb_order_create_recovery_task WHERE voucher_id = ${VOUCHER_ID}")
 OLD_RECONCILE=$(query "SELECT COUNT(*) FROM tb_seckill_reconcile_task WHERE voucher_id = ${VOUCHER_ID}")
 echo "  旧订单: ${OLD_ORDERS}  对账日志: ${OLD_LOGS}  核验任务: ${OLD_VERIFY}  恢复任务: ${OLD_RECOVERY}  对账任务: ${OLD_RECONCILE}"
 
-query "DELETE FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID};
+query "DELETE FROM tb_seckill_order WHERE voucher_id = ${VOUCHER_ID};
        DELETE FROM tb_voucher_reconcile_log WHERE voucher_id = ${VOUCHER_ID};
        DELETE FROM tb_order_create_verify_task WHERE voucher_id = ${VOUCHER_ID};
        DELETE FROM tb_order_create_recovery_task WHERE voucher_id = ${VOUCHER_ID};
@@ -118,7 +118,7 @@ for extra in ${EXTRA_VOUCHER_IDS:-}; do
   echo "  额外清理预热券 ${extra}..."
   EXTRA_ROWS=$(query "SELECT COUNT(*) FROM tb_seckill_voucher WHERE voucher_id = ${extra}")
   [ "${EXTRA_ROWS}" = "1" ] || fail "额外券 ${extra} 不在 tb_seckill_voucher：先执行 seed_warmup_voucher.sql"
-  query "DELETE FROM tb_voucher_order WHERE voucher_id = ${extra};
+  query "DELETE FROM tb_seckill_order WHERE voucher_id = ${extra};
          DELETE FROM tb_voucher_reconcile_log WHERE voucher_id = ${extra};
          DELETE FROM tb_order_create_verify_task WHERE voucher_id = ${extra};
          DELETE FROM tb_order_create_recovery_task WHERE voucher_id = ${extra};
@@ -191,7 +191,7 @@ REDIS_ORDERS=$("${REDIS_CMD[@]}" scard "seckill:order:${VOUCHER_ID}")
 TOKEN_COUNT=$("${REDIS_CMD[@]}" --scan --pattern 'login:token:tokentest*' | wc -l | tr -d ' ')
 CSV_LINES=$(wc -l < "${CSV_FILE}" | tr -d ' ')
 DB_STOCK=$(query "SELECT stock FROM tb_seckill_voucher WHERE voucher_id = ${VOUCHER_ID}")
-DB_ORDERS=$(query "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID}")
+DB_ORDERS=$(query "SELECT COUNT(*) FROM tb_seckill_order WHERE voucher_id = ${VOUCHER_ID}")
 DB_LOGS=$(query "SELECT COUNT(*) FROM tb_voucher_reconcile_log WHERE voucher_id = ${VOUCHER_ID}")
 DB_VERIFY=$(query "SELECT COUNT(*) FROM tb_order_create_verify_task WHERE voucher_id = ${VOUCHER_ID}")
 DB_RECOVERY=$(query "SELECT COUNT(*) FROM tb_order_create_recovery_task WHERE voucher_id = ${VOUCHER_ID}")

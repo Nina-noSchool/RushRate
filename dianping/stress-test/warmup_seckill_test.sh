@@ -106,7 +106,7 @@ MIN_OK=$((WARMUP_COUNT / 2))
 echo "  等待预热订单落库（最多 ${WARMUP_TIMEOUT}s）..."
 DEADLINE=$(( $(date +%s) + WARMUP_TIMEOUT ))
 while true; do
-  DB_999=$(query "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${WARMUP_VOUCHER_ID}")
+  DB_999=$(query "SELECT COUNT(*) FROM tb_seckill_order WHERE voucher_id = ${WARMUP_VOUCHER_ID}")
   [ "${DB_999}" -ge "${LUA_OK}" ] && { echo "  预热落库完成：DB=${DB_999} >= Lua=${LUA_OK}"; break; }
   [ "$(date +%s)" -ge "${DEADLINE}" ] \
     && fail "预热订单落库超时：DB=${DB_999} < Lua=${LUA_OK}，消费者可能卡住"

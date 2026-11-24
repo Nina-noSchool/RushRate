@@ -105,7 +105,7 @@ PONG=$("${REDIS_CMD[@]}" ping)
 echo "  应用: UP (port ${APP_PORT})，实例数: ${APP_COUNT}，Redis/MySQL: OK"
 
 # 基线必须是 prepare 后的干净状态；不干净时拒绝压测，避免 2957 脏数据类事故
-DB_ORDERS=$("${MYSQL_CMD[@]}" -e "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID}")
+DB_ORDERS=$("${MYSQL_CMD[@]}" -e "SELECT COUNT(*) FROM tb_seckill_order WHERE voucher_id = ${VOUCHER_ID}")
 DB_STOCK=$("${MYSQL_CMD[@]}" -e "SELECT stock FROM tb_seckill_voucher WHERE voucher_id = ${VOUCHER_ID}")
 REDIS_STOCK=$("${REDIS_CMD[@]}" get "seckill:stock:${VOUCHER_ID}")
 REDIS_ORDERS=$("${REDIS_CMD[@]}" scard "seckill:order:${VOUCHER_ID}")
@@ -260,7 +260,7 @@ else
   DRAIN_STATUS="TIMEOUT"
   DRAIN_START=$(date +%s)
   while true; do
-    DB_ORDERS=$("${MYSQL_CMD[@]}" -e "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID}")
+    DB_ORDERS=$("${MYSQL_CMD[@]}" -e "SELECT COUNT(*) FROM tb_seckill_order WHERE voucher_id = ${VOUCHER_ID}")
     if [ "${DB_ORDERS}" = "${EXPECTED_ORDERS}" ]; then
       DRAIN_STATUS="DRAINED"
       echo "  消费已收敛：DB 订单=${DB_ORDERS}（Redis 成功=${EXPECTED_ORDERS}）"
@@ -285,7 +285,7 @@ source "${RESULT_DIR}/metrics.env"
 
 REDIS_STOCK=$("${REDIS_CMD[@]}" get "seckill:stock:${VOUCHER_ID}" || echo "N/A")
 REDIS_ORDERS=$("${REDIS_CMD[@]}" scard "seckill:order:${VOUCHER_ID}" || echo "N/A")
-DB_ORDERS=$("${MYSQL_CMD[@]}" -e "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID}" || echo "N/A")
+DB_ORDERS=$("${MYSQL_CMD[@]}" -e "SELECT COUNT(*) FROM tb_seckill_order WHERE voucher_id = ${VOUCHER_ID}" || echo "N/A")
 DB_STOCK=$("${MYSQL_CMD[@]}" -e "SELECT stock FROM tb_seckill_voucher WHERE voucher_id = ${VOUCHER_ID}" || echo "N/A")
 
 # Redis 是同步预扣，Lua 成功数 = 并发数 - Redis 剩余库存
