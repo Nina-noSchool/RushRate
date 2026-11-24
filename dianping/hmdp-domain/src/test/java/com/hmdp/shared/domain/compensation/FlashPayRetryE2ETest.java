@@ -41,7 +41,9 @@ class FlashPayRetryE2ETest {
 
         StateMachineRegistry registry = new StateMachineRegistry();
         registry.register(new FlashPayStateMachineDefinition(
-                new PayoutAmountCalculator(Collections.singletonMap("FLASH_PAY", 50L), 500L),
+                new PayoutAmountCalculator(100000L,
+                        new com.hmdp.shared.domain.compensation.spi.InMemoryVoucherInfoProvider()
+                                .putPayable(13L, 6800L)),
                 gateway, auditRepository, notificationService,
                 true));
         StateEngine engine = new StateEngine(
@@ -55,7 +57,7 @@ class FlashPayRetryE2ETest {
 
         // 第一次驱动：支付超时（retryable=true）→ FAILED（等待重试调度 resume）
         StateTask first = facade.start("claim-e2e", "shop-1",
-                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现"));
+                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现", 13L));
         assertEquals(StateTaskStatus.FAILED, first.getRuntimeStatus());
         assertEquals(1, first.getRetryCount());
         assertNotNull(first.getLastMessage());
@@ -64,7 +66,7 @@ class FlashPayRetryE2ETest {
 
         // 第二次驱动（模拟重试调度 Job 的 resume）：网关二次支付成功 → COMPLETED
         StateTask second = facade.startOrResume("claim-e2e", "shop-1",
-                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现"));
+                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现", 13L));
         assertEquals(StateTaskStatus.COMPLETED, second.getRuntimeStatus());
         // 幂等证据：支付记录恰好一笔，终局消息是 COMPLETED 节点的自动赔付摘要
         assertNotNull(gateway.query("claim-e2e"));
@@ -77,7 +79,9 @@ class FlashPayRetryE2ETest {
                 com.hmdp.shared.domain.compensation.spi.MockMode.FAIL);
         StateMachineRegistry registry = new StateMachineRegistry();
         registry.register(new FlashPayStateMachineDefinition(
-                new PayoutAmountCalculator(Collections.singletonMap("FLASH_PAY", 50L), 500L),
+                new PayoutAmountCalculator(100000L,
+                        new com.hmdp.shared.domain.compensation.spi.InMemoryVoucherInfoProvider()
+                                .putPayable(13L, 6800L)),
                 gateway, new InMemoryPayoutAuditRepository(), new LoggingPayoutNotificationService(),
                 false));
         StateEngine engine = new StateEngine(
@@ -90,7 +94,7 @@ class FlashPayRetryE2ETest {
                 new InMemoryStateTaskRepository());
 
         StateTask result = facade.start("claim-off", "shop-1",
-                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现"));
+                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现", 13L));
 
         // 开关关闭 = 旧语义：即使 GATEWAY_TIMEOUT 也转人工
         assertEquals(StateTaskStatus.MANUAL_REVIEW, result.getRuntimeStatus());

@@ -1,6 +1,7 @@
 package com.hmdp.shared.domain.compensation.node;
 
 import com.hmdp.shared.domain.compensation.amount.PayoutAmountCalculator;
+import com.hmdp.shared.domain.compensation.amount.PayoutQuote;
 import com.hmdp.shared.domain.compensation.model.FlashPayPayload;
 import com.hmdp.shared.domain.compensation.model.FlashPayStateCode;
 import com.hmdp.shared.domain.compensation.spi.PaymentResult;
@@ -13,8 +14,10 @@ import com.hmdp.shared.stateengine.service.StateNode;
 /**
  * 闪赔审批通过节点 — 计算赔付金额并调用支付网关。
  *
- * <p>流程：反序列化 payload 取 planCode → 算金额 → 调 gateway.pay(taskId, amount)。
- * 无规则、结果为零返回 failure(retryable=false)——赔付范围语义问题，重试无意义。</p>
+ * <p>流程（2026-11-24 改为按券值赔付）：反序列化 payload 取 voucherId → 计算器按券实付金额报价
+ * → 不可赔（券已核销/不存在/超限等）返回 failure(retryable=false) 转人工 → 可赔则调 gateway.pay。</p>
+ *
+ * <p>为什么 retryable=false：券是否核销、券值是否超限都是确定的业务事实，重试不会改变结论。</p>
  *
  * <p><b>失败分层（2026-11-18，P6）</b>：支付侧失败按瞬时性分层——</p>
  * <ul>
@@ -55,15 +58,16 @@ public class FlashPayApprovedNode implements StateNode {
      */
     @Override
     public NodeResult execute(StateTask task, StateContext context) {
-        // payload 仍是引擎不感知的纯字符串，节点自己反序列化取 planCode
+        // payload 仍是引擎不感知的纯字符串，节点自己反序列化取 voucherId
         FlashPayPayload payload = FlashPayPayload.deserialize(task.getPayload());
 
-        // 金额计算器内部会按 planCode 查规则、再受 maxAmount 上限约束
-        long amount = calculator.calculate(payload.getPlanCode());
-        if (amount <= 0) {
-            // 无规则或结果为零意味着这个 planCode 不在赔付范围内，不是可重试故障
-            return NodeResult.failure("NO_PAYOUT_RULE", "未配置赔付金额规则", false);
+        // 计算器按券实付金额报价：已核销/券不存在/超限等一律带明确原因码拒绝
+        PayoutQuote quote = calculator.calculate(payload.getVoucherId());
+        if (!quote.isPayable()) {
+            // 确定的业务事实（券状态/券值），重试不会改变结论 → retryable=false 转人工
+            return NodeResult.failure(quote.getRejectCode(), quote.getRejectMessage(), false);
         }
+        long amount = quote.getAmountFen();
 
         PaymentResult payResult;
         try {

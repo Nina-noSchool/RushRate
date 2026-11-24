@@ -91,10 +91,10 @@ seckill:
     scan-delay-minutes: 3
     compensation-max-retry-count: 5
     compensation-retry-delay-seconds: 30
-    # ===== 第三对账方向（默认关）：以 Redis 追踪日志为主视角找"Redis 已扣、DB 无痕"幽灵预占 =====
+    # ===== 第三对账方向（已开启）：以 Redis 追踪日志为主视角找"Redis 已扣、DB 无痕"幽灵预占 =====
     # SCAN + HSCAN 游标分批（禁 KEYS/HGETALL），单轮 field 预算 = scan-batch-size；
     # 只发现转人工（REDIS_DEDUCT_PRESENT_DB_MISSING），不给它开自动补偿
-    trace-scan-enabled: false
+    trace-scan-enabled: true
   # ===== 批次1 ①：秒杀入口滑动窗口限流（可开关，供压测对比实验） =====
   rate-limit:
     sliding-window:
@@ -133,8 +133,8 @@ bloom:
 
 # ===== 无忧闪赔赔付配置 =====
 flash-pay:
-  payout-rules:
-    FLASH_PAY: 50
-  max-payout: 500
+  # 2026-11-24 改为按券实付金额（tb_voucher.pay_value）全额退，规则表已移除。
+  # 单笔上限只做异常大额兜底：超限转人工，不截断（否则 68 元券赔 5 元还叫"全额退"就自相矛盾）。
+  max-payout: 100000   # 单位分 = 1000 元，覆盖在售最高券值
   payment:
     mock-mode: SUCCESS   # SUCCESS / FAIL / REJECT

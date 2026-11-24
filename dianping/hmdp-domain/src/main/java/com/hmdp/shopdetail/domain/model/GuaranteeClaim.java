@@ -24,6 +24,9 @@ public class GuaranteeClaim {
     /** 发起申诉的用户ID */
     private Long userId;
 
+    /** 关联券 ID — 闪赔按该券实付金额赔付（2026-11-24） */
+    private Long voucherId;
+
     /** 申诉单号，业务唯一标识，同时作为状态机的 taskId（tb_state_task.uk_task_id） */
     private String claimNo;
 

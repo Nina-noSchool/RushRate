@@ -15,7 +15,7 @@ class FlashPayStateMachineCompatibilityTest {
     void should_complete_flash_compensation_when_reason_is_valid() {
         FlashPayStateMachineFacade facade = FlashPayStateMachineFacade.createDefault();
         StateTask result = facade.start("claim-1", "shop-1",
-                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现"));
+                new FlashPayPayload("FLASH_PAY", "商家提前打烊，权益未兑现", 13L));
 
         assertEquals(StateTaskStatus.COMPLETED, result.getRuntimeStatus());
         assertEquals("COMPLETED", result.getCurrentState());
@@ -27,7 +27,7 @@ class FlashPayStateMachineCompatibilityTest {
     void should_route_to_manual_review_when_reason_is_blank() {
         FlashPayStateMachineFacade facade = FlashPayStateMachineFacade.createDefault();
         StateTask result = facade.start("claim-2", "shop-2",
-                new FlashPayPayload("FLASH_PAY", ""));
+                new FlashPayPayload("FLASH_PAY", "", 13L));
 
         assertEquals(StateTaskStatus.MANUAL_REVIEW, result.getRuntimeStatus());
         assertEquals("MANUAL_REVIEW", result.getCurrentState());

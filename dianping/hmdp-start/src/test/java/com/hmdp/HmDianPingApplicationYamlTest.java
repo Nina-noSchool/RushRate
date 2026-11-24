@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HmDianPingApplicationYamlTest {
@@ -39,8 +40,8 @@ class HmDianPingApplicationYamlTest {
         assertEquals(10000, ((Number) producer.get("send-message-timeout")).intValue());
 
         Map<String, Object> flashPay = (Map<String, Object>) root.get("flash-pay");
-        Map<String, Object> payoutRules = (Map<String, Object>) flashPay.get("payout-rules");
-        assertEquals(50, ((Number) payoutRules.get("FLASH_PAY")).intValue());
-        assertEquals(500, ((Number) flashPay.get("max-payout")).intValue());
+        // 2026-11-24：规则表已移除，改为按券实付金额赔付；max-payout 只做异常大额兜底
+        assertNull(flashPay.get("payout-rules"));
+        assertEquals(100000, ((Number) flashPay.get("max-payout")).intValue());
     }
 }

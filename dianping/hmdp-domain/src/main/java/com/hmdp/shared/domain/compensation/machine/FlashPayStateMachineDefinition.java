@@ -47,7 +47,7 @@ public class FlashPayStateMachineDefinition extends StateMachineDefinition {
     /**
      * 构造器注入所有业务依赖，用于构造内部节点。
      *
-     * @param calculator           赔付金额计算器
+     * @param calculator           赔付金额计算器（按券值报价）
      * @param gateway              支付网关
      * @param auditRepository      赔付审计仓储
      * @param notificationService  赔付通知服务

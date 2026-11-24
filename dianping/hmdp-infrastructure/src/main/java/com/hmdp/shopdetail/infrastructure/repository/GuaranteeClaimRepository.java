@@ -46,6 +46,7 @@ public class GuaranteeClaimRepository implements com.hmdp.shopdetail.domain.repo
         dataObject.setId(claim.getId());
         dataObject.setShopId(claim.getShopId());
         dataObject.setUserId(claim.getUserId());
+        dataObject.setVoucherId(claim.getVoucherId());
         dataObject.setClaimNo(claim.getClaimNo());
         dataObject.setPlanCode(claim.getPlanCode());
         dataObject.setReason(claim.getReason());
@@ -60,6 +61,7 @@ public class GuaranteeClaimRepository implements com.hmdp.shopdetail.domain.repo
         claim.setId(dataObject.getId());
         claim.setShopId(dataObject.getShopId());
         claim.setUserId(dataObject.getUserId());
+        claim.setVoucherId(dataObject.getVoucherId());
         claim.setClaimNo(dataObject.getClaimNo());
         claim.setPlanCode(dataObject.getPlanCode());
         claim.setReason(dataObject.getReason());

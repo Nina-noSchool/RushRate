@@ -21,6 +21,8 @@ public class GuaranteeClaim {
     private Long id;
     private Long shopId;
     private Long userId;
+    /** 关联券 ID — 闪赔赔付基数来源 */
+    private Long voucherId;
     private String claimNo;
     private String planCode;
     private String reason;

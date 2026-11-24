@@ -75,6 +75,7 @@ public class ShopDetailController {
         GuaranteeClaim claim = new GuaranteeClaim();
         claim.setShopId(request.getShopId());
         claim.setUserId(user.getId());
+        claim.setVoucherId(request.getVoucherId());
         claim.setPlanCode(request.getPlanCode());
         claim.setReason(request.getReason());
         claim.setClaimNo("claim-" + UUID.randomUUID().toString().replace("-", ""));

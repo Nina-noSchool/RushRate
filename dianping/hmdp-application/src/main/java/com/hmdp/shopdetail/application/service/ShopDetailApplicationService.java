@@ -179,9 +179,10 @@ public class ShopDetailApplicationService {
      * CBB 只关心“状态怎么流转”，赔付业务字段由 flash-pay 场景自己解释。
      */
     private GuaranteeClaim runCompensation(GuaranteeClaim claim, boolean allowResume) {
-        // 只把 planCode + reason 塞进最小 payload，而不是整个 claim：引擎不感知业务实体，
+        // 只把 planCode + reason + voucherId 塞进最小 payload，而不是整个 claim：引擎不感知业务实体，
         // 引擎只关心"状态怎么流转"，赔付业务字段由 flash-pay 场景自己解释（防止引擎层反向依赖领域模型）
-        FlashPayPayload payload = new FlashPayPayload(claim.getPlanCode(), claim.getReason());
+        // voucherId 是 2026-11-24 按券值赔付新增：计算器据此查券实付金额与核销态
+        FlashPayPayload payload = new FlashPayPayload(claim.getPlanCode(), claim.getReason(), claim.getVoucherId());
         // 三元选择首次 vs 重试：
         //   allowResume=false → start   新建 StateTask，claimNo 作为 taskId，shopId 作为 bizKey
         //   allowResume=true  → startOrResume 先查 taskRepository，有任务则 resume 从持久化状态续跑，无任务则新建

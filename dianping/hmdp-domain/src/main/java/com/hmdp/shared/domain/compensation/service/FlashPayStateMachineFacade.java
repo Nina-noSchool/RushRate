@@ -6,6 +6,7 @@ import com.hmdp.shared.domain.compensation.model.FlashPayPayload;
 import com.hmdp.shared.domain.compensation.model.FlashPayStateCode;
 import com.hmdp.shared.domain.compensation.spi.InMemoryPayoutAuditRepository;
 import com.hmdp.shared.domain.compensation.spi.InMemoryPayoutGateway;
+import com.hmdp.shared.domain.compensation.spi.InMemoryVoucherInfoProvider;
 import com.hmdp.shared.domain.compensation.spi.LoggingPayoutNotificationService;
 import com.hmdp.shared.domain.compensation.spi.MockMode;
 import com.hmdp.shared.stateengine.model.StateTask;
@@ -16,9 +17,6 @@ import com.hmdp.shared.stateengine.spi.InMemoryStateTaskRepository;
 import com.hmdp.shared.stateengine.spi.InMemoryStateTransitionLogRepository;
 import com.hmdp.shared.stateengine.spi.StateTaskRepository;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * 无忧闪赔状态机门面 — 闪赔状态机的业务入口。
@@ -49,13 +47,14 @@ public class FlashPayStateMachineFacade {
      *   <li>存储：InMemory（内存存储，不持久化）</li>
      *   <li>重试：最大3次</li>
      *   <li>Mock 支付：SUCCESS 模式</li>
-     *   <li>赔付规则：FLASH_PAY=50分，max=500分</li>
+     *   <li>按券值赔付：内置券 13 实付 6800 分（未核销），单笔上限 100000 分兜底</li>
      * </ul></p>
      */
     public static FlashPayStateMachineFacade createDefault() {
-        Map<String, Long> rules = new HashMap<>();
-        rules.put("FLASH_PAY", 50L);
-        PayoutAmountCalculator calculator = new PayoutAmountCalculator(rules, 500L);
+        // 内存版券信息：券 13 = 68 元未核销可赔，保证 createDefault 的 start 能走通自动赔付
+        InMemoryVoucherInfoProvider voucherProvider = new InMemoryVoucherInfoProvider()
+                .putPayable(13L, 6800L);
+        PayoutAmountCalculator calculator = new PayoutAmountCalculator(100000L, voucherProvider);
         InMemoryPayoutGateway gateway = new InMemoryPayoutGateway(MockMode.SUCCESS);
         InMemoryPayoutAuditRepository audit = new InMemoryPayoutAuditRepository();
         LoggingPayoutNotificationService notif = new LoggingPayoutNotificationService();

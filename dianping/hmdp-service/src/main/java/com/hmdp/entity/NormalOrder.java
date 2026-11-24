@@ -3,6 +3,7 @@ package com.hmdp.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.hmdp.shared.reconciliation.model.VoucherOrderStatus;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -42,4 +43,13 @@ public class NormalOrder implements Serializable {
 
     /** 更新时间 */
     private LocalDateTime updateTime;
+
+    /**
+     * 订单状态 — 2026-11-24 闪赔按券值赔付改造补加。
+     * 原瘦表无此列导致普通券无法判断核销态，只能一律转人工。
+     */
+    private VoucherOrderStatus status;
+
+    /** 核销时间 — 与 status=VERIFIED 等价，双写便于排查 */
+    private LocalDateTime useTime;
 }

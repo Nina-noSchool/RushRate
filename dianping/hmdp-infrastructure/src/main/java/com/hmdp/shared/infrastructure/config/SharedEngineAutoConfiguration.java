@@ -8,6 +8,7 @@ import com.hmdp.shared.domain.compensation.spi.MockMode;
 import com.hmdp.shared.domain.compensation.spi.PayoutAuditRepository;
 import com.hmdp.shared.domain.compensation.spi.PayoutGateway;
 import com.hmdp.shared.domain.compensation.spi.PayoutNotificationService;
+import com.hmdp.shared.domain.compensation.spi.VoucherInfoProvider;
 import com.hmdp.shared.stateengine.policy.RetryPolicy;
 import com.hmdp.shared.stateengine.service.StateEngine;
 import com.hmdp.shared.stateengine.service.StateMachineRegistry;
@@ -25,9 +26,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.Executor;
 
 /**
@@ -57,11 +56,10 @@ public class SharedEngineAutoConfiguration {
     }
 
     @Bean
-    public PayoutAmountCalculator payoutAmountCalculator(PayoutAuditProperties properties) {
-        Map<String, Long> rules = properties.getPayoutRules() != null
-                ? properties.getPayoutRules()
-                : new HashMap<>();
-        return new PayoutAmountCalculator(rules, properties.getMaxPayout());
+    public PayoutAmountCalculator payoutAmountCalculator(PayoutAuditProperties properties,
+                                                         VoucherInfoProvider voucherInfoProvider) {
+        // 2026-11-24：按券实付金额赔付，maxPayout 只做异常大额兜底（超限转人工，不截断）
+        return new PayoutAmountCalculator(properties.getMaxPayout(), voucherInfoProvider);
     }
 
     @Bean
