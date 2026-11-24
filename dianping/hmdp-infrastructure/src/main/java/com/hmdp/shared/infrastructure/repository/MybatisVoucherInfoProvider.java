@@ -61,7 +61,9 @@ public class MybatisVoucherInfoProvider implements VoucherInfoProvider {
             List<VoucherOrder> orders = voucherOrderMapper.selectList(
                     Wrappers.<VoucherOrder>lambdaQuery()
                             .eq(VoucherOrder::getVoucherId, voucherId)
-                            .orderByDesc(VoucherOrder::getCreateTime));
+                            // 二次排序加 id DESC：压测数据里大量订单 create_time 相同，
+                            // 只按 create_time 排取值不稳定，id 兜底保证"最近一笔"确定。
+                            .orderByDesc(VoucherOrder::getCreateTime, VoucherOrder::getId));
             if (orders.isEmpty()) {
                 return null;
             }
@@ -75,7 +77,8 @@ public class MybatisVoucherInfoProvider implements VoucherInfoProvider {
         List<NormalOrder> orders = normalOrderMapper.selectList(
                 Wrappers.<NormalOrder>lambdaQuery()
                         .eq(NormalOrder::getVoucherId, voucherId)
-                        .orderByDesc(NormalOrder::getCreateTime));
+                        // 同秒杀单：create_time 相同时用 id DESC 兜底，取值确定
+                        .orderByDesc(NormalOrder::getCreateTime, NormalOrder::getId));
         if (orders.isEmpty()) {
             return null;
         }

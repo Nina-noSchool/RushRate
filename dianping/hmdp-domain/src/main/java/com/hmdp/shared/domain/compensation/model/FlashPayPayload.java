@@ -33,18 +33,43 @@ public class FlashPayPayload {
 
     /** 从 StateTask.payload 反序列化还原 */
     public static FlashPayPayload deserialize(String payload) {
-        // limit=3：保证 reason 字段里即便包含 | 也不会被多切（只切成 planCode/reason/voucherId 三段）
-        String[] parts = payload.split("\\|", 3);
-        String planCode = parts[0];
-        String reason = parts.length > 1 ? parts[1] : "";
-        String voucherPart = parts.length > 2 ? parts[2] : "";
+        // 不能从头 split("\\|", 3)：reason 是用户填写的、内容不可控，一旦含 | 就会把
+        // voucherId 挤到中间段、导致第三段丢失 → 全额退被误判成 NO_VOUCHER 转人工。
+        // 正确做法：voucherId 固定在末尾且是纯数字，从末尾用 lastIndexOf 切最后一段；
+        // 前面整段再按第一个 | 切成 planCode / reason，reason 里任意 | 都原样保留。
+        String planCode;
+        String reason;
         Long voucherId = null;
+
+        int lastPipe = payload.lastIndexOf('|');
+        if (lastPipe < 0) {
+            // 兼容老格式/异常数据：没有任何分隔符，整串当 planCode
+            return new FlashPayPayload(payload, "", null);
+        }
+
+        String head = payload.substring(0, lastPipe);          // planCode|reason（reason 可含 |）
+        String voucherPart = payload.substring(lastPipe + 1);  // 末段：voucherId
         if (!voucherPart.isEmpty()) {
             try {
                 voucherId = Long.valueOf(voucherPart);
             } catch (NumberFormatException ignored) {
-                // 非法 voucherId 视作缺失，APPROVED 节点会以 NO_VOUCHER 转人工
+                // 末段不是数字：说明这是老的两段格式 planCode|reason（末段是原因文本），
+                // 退回按第一段 | 切分，voucherId 缺失 → 走 NO_VOUCHER 转人工
+                int firstPipe = payload.indexOf('|');
+                planCode = payload.substring(0, firstPipe);
+                reason = payload.substring(firstPipe + 1);
+                return new FlashPayPayload(planCode, reason, null);
             }
+        }
+
+        int firstPipe = head.indexOf('|');
+        if (firstPipe < 0) {
+            // 只有一段分隔符：planCode|voucherId 缺 reason（异常数据）
+            planCode = head;
+            reason = "";
+        } else {
+            planCode = head.substring(0, firstPipe);
+            reason = head.substring(firstPipe + 1);
         }
         return new FlashPayPayload(planCode, reason, voucherId);
     }
