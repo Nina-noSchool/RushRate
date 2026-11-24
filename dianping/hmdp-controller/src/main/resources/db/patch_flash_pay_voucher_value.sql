@@ -30,17 +30,18 @@ ALTER TABLE tb_normal_order
 --   · 次近一笔  → VERIFIED(3) 演示「已核销 → 转人工」（把最近一笔也改成 3 即可切换分支）
 -- 注意：种子数据这批订单 create_time 全部相同，仅靠 ORDER BY create_time 取值不稳定，
 -- 所以这里同时把 create_time 显式错开（PAID 最新、VERIFIED 次新），保证 provider 稳定取到目标笔。
+-- 二次排序加 id DESC：create_time 相同的批次里也要确定取哪一笔，否则 ORDER BY 结果不稳定。
 UPDATE tb_seckill_order
 SET status = 2, pay_time = NOW(), use_time = NULL, create_time = NOW()
 WHERE id = (SELECT id FROM (
-    SELECT id FROM tb_seckill_order WHERE voucher_id = 13 ORDER BY create_time DESC LIMIT 1
+    SELECT id FROM tb_seckill_order WHERE voucher_id = 13 ORDER BY create_time DESC, id DESC LIMIT 1
 ) t);
 
 UPDATE tb_seckill_order
 SET status = 3, pay_time = NOW(), use_time = NOW(),
     create_time = DATE_SUB(NOW(), INTERVAL 1 SECOND)
 WHERE id = (SELECT id FROM (
-    SELECT id FROM tb_seckill_order WHERE voucher_id = 13 ORDER BY create_time DESC LIMIT 1, 1
+    SELECT id FROM tb_seckill_order WHERE voucher_id = 13 ORDER BY create_time DESC, id DESC LIMIT 1, 1
 ) t);
 
 -- 核对：应看到 1 笔 PAID(2)、1 笔 VERIFIED(3)，其余保持原状
