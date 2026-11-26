@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>设计要点：
  * <ol>
- *   <li><b>启动时预注册</b>：七个计数器在 Bean 构造时以 0 注册到 MeterRegistry，
+ *   <li><b>启动时预注册</b>：所有计数器在 Bean 构造时以 0 注册到 MeterRegistry，
  *       Grafana 面板不会出现 "no data"；事件发生时 increment。</li>
  *   <li><b>命名规范</b>：点分式（Micrometer 惯例），Prometheus 侧自动转为下划线，
  *       counter 类型自动追加 _total 后缀，如 hmdp.mq.event.failed → hmdp_mq_event_failed_total。</li>
@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *   hmdp.ratelimit.rejected      滑动窗口限流拒绝请求            SlidingWindowInterceptor（批次1 ①）
  *   hmdp.user.voucher.conflict   用户+券唯一索引冲突回滚          SeckillPlusOrderListener USER_VOUCHER_CONFLICT 分支（2026-11-22）
  *   hmdp.consume.batch.error     消费端批量处理单条异常          SeckillPlusOrderListener 批量 catch 分支
+ *   hmdp.cache.evict.failure     事务提交后缓存驱逐失败          ShopServiceImpl.safeEvictAndBroadcast（2026-11-26）
  * </pre></p>
  */
 @Component
@@ -43,6 +44,7 @@ public class MetricsRecorder {
     private final Counter ratelimitRejected;
     private final Counter userVoucherConflict;
     private final Counter consumeBatchError;
+    private final Counter cacheEvictFailure;
     /**
      * 追踪日志对账扫描最近一轮成功的时刻（epoch millis，0 = 从未成功）。
      * 心跳告警的数据源：配套 gauge 报告"距上一轮成功过了多少秒"，
@@ -59,6 +61,7 @@ public class MetricsRecorder {
         this.ratelimitRejected = counter(registry, "hmdp.ratelimit.rejected", "滑动窗口限流拒绝请求数");
         this.userVoucherConflict = counter(registry, "hmdp.user.voucher.conflict", "用户+券唯一索引冲突回滚次数（Redis一人一单标记失效的灾备信号）");
         this.consumeBatchError = counter(registry, "hmdp.consume.batch.error", "消费端批量处理单条异常次数");
+        this.cacheEvictFailure = counter(registry, "hmdp.cache.evict.failure", "事务提交后缓存驱逐失败次数（本地/Redis 删除失败，等逻辑过期兜底）");
         // 心跳 gauge：以 AtomicLong 为状态源（本类字段强引用持有，规避 micrometer 弱引用回收）。
         // 0 时刻注册保证 Prometheus 侧无空窗；从未成功时 age ≈ now - 0（天文数字），语义即"从未活着"
         Gauge.builder("hmdp.reconcile.trace.scan.idle.seconds", traceScanLastSuccessMillis,
@@ -114,5 +117,10 @@ public class MetricsRecorder {
     /** 消费端批量处理中单条消息异常（转恢复任务的分支） */
     public void incConsumeBatchError() {
         consumeBatchError.increment();
+    }
+
+    /** 事务提交后驱逐缓存失败（DB 已提交，等待 L1/L2 逻辑过期自愈） */
+    public void incCacheEvictFailure() {
+        cacheEvictFailure.increment();
     }
 }

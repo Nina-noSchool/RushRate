@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
+import com.hmdp.metrics.MetricsRecorder;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.shopreview.dto.CreateShopReviewRequest;
@@ -19,6 +20,7 @@ import com.hmdp.utils.RedisBloomFilter;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.RedisData;
 import com.hmdp.utils.SystemConstants;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
@@ -30,6 +32,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import jakarta.annotation.Generated;
 import jakarta.annotation.Resource;
@@ -48,6 +52,7 @@ import static com.hmdp.utils.RedisConstants.*;
  * @author 虎哥
  * @since 2021-12-22
  */
+@Slf4j
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
@@ -75,6 +80,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
      */
     @Autowired(required = false)
     private RedisBloomFilter shopBloomFilter;
+
+    /** 提交后缓存驱逐失败打点：失败只告警，不能让已提交的写请求对外表现为失败 */
+    @Resource
+    private MetricsRecorder metricsRecorder;
 
     @Override
     public Result queryById(Long id){
@@ -276,8 +285,76 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         //1.先修改数据库
         updateById(shop);
         //2.删除缓存：本地+Redis 双删，并广播其他实例失效（批次3 ②）
-        multiLevelCacheService.evictAndBroadcast(CACHE_SHOP_KEY, shop.getId());
+        //   必须等事务提交后再删——提交前删，删除到提交之间的读请求会回源读到旧值并回填，
+        //   提交后缓存里反而挂着旧值，只能等逻辑过期（30 分钟）自愈
+        evictCacheAfterCommit(shop.getId());
         return Result.ok();
+    }
+
+    /**
+     * 把"双删 + 广播"推迟到事务提交成功后执行。
+     *
+     * <p>无事务上下文（内部直调、单测、非事务调用方）没有"提交"可等，立即同步执行，
+     * 语义与改造前一致——不能因为拿不到事务就跳过删除。</p>
+     */
+    private void evictCacheAfterCommit(Long shopId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            safeEvictAndBroadcast(shopId);
+            return;
+        }
+        // 同一事务内多次 update 同一店铺只广播一次：afterCommit 里的 syncSend 要等 broker ack，
+        // 每注册一个同步器就多一次 RTT，重复 key 直接并进已有同步器
+        for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
+            if (synchronization instanceof AfterCommitEviction) {
+                ((AfterCommitEviction) synchronization).add(shopId);
+                return;
+            }
+        }
+        TransactionSynchronizationManager.registerSynchronization(new AfterCommitEviction(shopId));
+    }
+
+    /**
+     * 提交后执行驱逐：此时 DB 已提交，缓存侧任何失败都不能反向影响调用方——
+     * 只告警 + 打点，脏读窗口交给 L1/L2 自身的逻辑过期兜底。
+     */
+    private void safeEvictAndBroadcast(Long shopId) {
+        try {
+            multiLevelCacheService.evictAndBroadcast(CACHE_SHOP_KEY, shopId);
+        } catch (Exception e) {
+            metricsRecorder.incCacheEvictFailure();
+            log.warn("[多级缓存] 事务提交后驱逐缓存失败，等待逻辑过期兜底, shopId={}", shopId, e);
+        }
+    }
+
+    /**
+     * 事务提交后统一驱逐的同步器：收集本事务内需要失效的店铺 id，提交后逐个执行。
+     * 回滚时数据没变，不删缓存，只留 debug 解释"为什么没删"。
+     */
+    private final class AfterCommitEviction implements TransactionSynchronization {
+
+        private final Set<Long> shopIds = new LinkedHashSet<>();
+
+        private AfterCommitEviction(Long shopId) {
+            this.shopIds.add(shopId);
+        }
+
+        private void add(Long shopId) {
+            this.shopIds.add(shopId);
+        }
+
+        @Override
+        public void afterCommit() {
+            for (Long shopId : shopIds) {
+                safeEvictAndBroadcast(shopId);
+            }
+        }
+
+        @Override
+        public void afterCompletion(int status) {
+            if (status != TransactionSynchronization.STATUS_COMMITTED) {
+                log.debug("[多级缓存] 事务未提交(status={})，跳过缓存驱逐, shopIds={}", status, shopIds);
+            }
+        }
     }
 
     @Override
